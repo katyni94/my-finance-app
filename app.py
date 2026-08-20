@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import requests
-import re  # ДОБАВЛЕНО ДЛЯ БЕЗОПАСНОГО УДАЛЕНИЯ ВСЕХ ПРОБЕЛОВ
+import re
 from datetime import datetime, timedelta
 from prophet import Prophet
 
@@ -374,7 +374,7 @@ with tab3:
                     st.write("Недостаточно данных для анализа.")
 
 # ================================
-# Вкладка 4: Чистая доходность и макро-риски (ИСПРАВЛЕНА ОШИБКА)
+# Вкладка 4: Чистая доходность и макро-риски (ОКОНЧАТЕЛЬНОЕ ИСПРАВЛЕНИЕ)
 # ================================
 with tab4:
     st.subheader("📊 Чистая доходность и макроэкономические риски")
@@ -417,13 +417,10 @@ with tab4:
 
         portfolio_df = pd.DataFrame(st.session_state.portfolio_data)
         
-        # ================= ИСПРАВЛЕНИЕ ОШИБКИ НИЖЕ =================
-        # Используем регулярное выражение, чтобы выловить любые пробелы и нечисловые символы, и превратить в безопасное число
         total_allocated_rub = pd.to_numeric(
             portfolio_df['Выделено (₽)'].astype(str).str.replace(r'[^\d]', '', regex=True), 
             errors='coerce'
         ).sum()
-        # =========================================================
 
         stock_rub = 0.0
         bond_rub = 0.0
@@ -434,11 +431,11 @@ with tab4:
         for _, row in portfolio_df.iterrows():
             name = row['Актив']
             
-            # === ИСПРАВЛЕНИЕ ОШИБКИ НА СТРОКЕ 436 ===
-            # Безопасная конвертация суммы в строку и удаление абсолютно всех пробельных символов (включая неразрывные)
-            cleaned_str = re.sub(r'\s+', '', str(row['Выделено (₽)']))
+            # ================= ОКОНЧАТЕЛЬНОЕ ИСПРАВЛЕНИЕ =================
+            # Удаляем ВСЕ, кроме цифр. Это безопасно для float()
+            cleaned_str = re.sub(r'[^\d]', '', str(row['Выделено (₽)']))
             amount = float(cleaned_str) if cleaned_str else 0.0
-            # ========================================
+            # ============================================================
 
             if "ОФЗ" in name: bond_rub += amount
             elif "Золото" in name or "GC=F" in name or "PL=F" in name: gold_rub += amount
