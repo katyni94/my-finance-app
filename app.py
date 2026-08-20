@@ -61,9 +61,7 @@ ASSETS_DB = {
 
 # ================= УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ЗАГРУЗКИ ЦЕНЫ (ИСПРАВЛЕНИЕ ДЛЯ ВАЛЮТ) =================
 def get_live_price(ticker):
-    """Загружает текущую цену, берет период в 5 дней, чтобы Yahoo не выдал ошибку."""
     try:
-        # Используем период в 5 дней, чтобы точно получить данные (для валют это критично)
         df = yf.download(ticker, period="5d", progress=False)
         if df.empty:
             return 0.0
@@ -75,7 +73,7 @@ def get_live_price(ticker):
         return 0.0
 
 # --- Интерфейс ---
-tab1, tab2, tab3 = st.tabs(["📈 График и данные", "💼 Сбор портфеля", "🤖 Прогноз и анализ рисков"])
+tab1, tab2, tab3, tab4 = st.tabs(["📈 График", "💼 Портфель", "🤖 ИИ-прогноз", "📊 Доходность и риски"])
 
 # ================================
 # Вкладка 1: Детальный анализ актива
@@ -130,12 +128,9 @@ with tab1:
         st.plotly_chart(fig, use_container_width=True)
 
 # ================================
-# Вкладка 2: Портфель (Динамическое кол-во активов)
+# Вкладка 2: Портфель (Динамическое кол-во активов) + Сохранение в Session State
 # ================================
-
-# --- ФУНКЦИЯ ПЛАНА ДЕЙСТВИЙ (АЛГОРИТМИЧЕСКИЙ ИИ) ---
 def generate_action_plan(asset_name, price, risk_profile, alloc_rub):
-    """Генерирует план действий для конкретного актива."""
     price = float(price)
     if price <= 0:
         return "Цена недоступна. Проверьте данные."
@@ -162,6 +157,10 @@ def generate_action_plan(asset_name, price, risk_profile, alloc_rub):
         else:
             return "📈 **Актив роста.** Стоп-лосс: -10%. При росте на 15% - зафиксируйте часть прибыли."
 
+# Инициализация переменной для передачи между вкладками
+if 'portfolio_data' not in st.session_state:
+    st.session_state.portfolio_data = None
+
 with tab2:
     st.subheader("💼 Динамический портфель с ИИ-планом действий")
     st.info("Количество позиций подбирается автоматически. Если сумма на актив меньше 3000 ₽, он исключается (чтобы избежать лишних комиссий).")
@@ -171,19 +170,12 @@ with tab2:
 
     if st.button("Собрать портфель и получить план"):
         with st.spinner("Загружаем цены и просчитываем стратегию..."):
-            # ИЗМЕНЕНИЕ: Пороговое значение для включения актива в портфель
             MIN_POSITION_RUB = 3000 
-
-            # Исправленный список
             tickers_to_check = ["GC=F", "BTC-USD", "NVDA", "SBER", "USDRUB=X", "CNYRUB=X", "SU26227RMFS4"]
             prices = {t: 0.0 for t in tickers_to_check}
-            usd_rub_price = 90.0 
-
-            # Загрузка курса доллара через улучшенную функцию
             usd_rub_price = get_live_price("USDRUB=X")
-            if usd_rub_price <= 0: usd_rub_price = 90.0 # Заглушка
+            if usd_rub_price <= 0: usd_rub_price = 90.0 
 
-            # Загрузка цен всех активов через улучшенную функцию
             for t in tickers_to_check:
                 if t == "SBER" or t == "SU26227RMFS4": 
                     df = get_moex_data(t, 2)
@@ -193,50 +185,34 @@ with tab2:
                 else: 
                     prices[t] = get_live_price(t)
 
-            # Логика распределения
             asset_alloc_base = {
                 "Консервативный (Низкий риск)": {"Золото (GC=F)": 0.25, "ОФЗ (SU26227RMFS4)": 0.25, "Доллар США (USDRUB)": 0.20, "Китайский юань (CNYRUB)": 0.15, "Сбербанк (SBER)": 0.10, "Биткоин (BTC-USD)": 0.05},
                 "Сбалансированный (Средний риск)": {"Золото (GC=F)": 0.15, "ОФЗ (SU26227RMFS4)": 0.15, "Доллар США (USDRUB)": 0.15, "Китайский юань (CNYRUB)": 0.10, "Сбербанк (SBER)": 0.15, "NVIDIA (NVDA)": 0.15, "Биткоин (BTC-USD)": 0.15},
                 "Агрессивный (Максимальный доход)": {"Биткоин (BTC-USD)": 0.25, "NVIDIA (NVDA)": 0.20, "Сбербанк (SBER)": 0.15, "Золото (GC=F)": 0.10, "Доллар США (USDRUB)": 0.10, "Китайский юань (CNYRUB)": 0.10, "ОФЗ (SU26227RMFS4)": 0.10}
             }
-            
             initial_alloc = asset_alloc_base[risk_profile]
             
-            # ФИЛЬТРАЦИЯ И РАСПРЕДЕЛЕНИЕ
             final_alloc = {}
             budget_left = budget
             pool_cash = 0.0
             
-            # Сначала проверяем каждую долю
             for name, ratio in initial_alloc.items():
                 alloc_rub = int(budget * ratio)
                 if alloc_rub >= MIN_POSITION_RUB:
                     final_alloc[name] = ratio
                 else:
-                    # Исключаем актив, если сумма на него слишком мала
                     pool_cash += alloc_rub
 
-            # Если все активы исключены, берем хотя бы самый надежный (первый)
             if not final_alloc:
                 st.warning("⚠️ Бюджет слишком мал для разделения на активы. Все деньги направлены в самый надежный актив.")
                 first_asset = list(initial_alloc.keys())[0]
                 final_alloc[first_asset] = 1.0
 
-            # Вывод таблицы
             table_data = []
             total_spent_rub = 0
             
-            # Пересчитываем сумму для оставшихся активов (пропорционально)
-            # Добавляем сэкономленные деньги к первому активу или оставляем как свободный остаток
-            # Оставляем как свободный остаток (он уйдет в leftover)
-
             for name, ratio in final_alloc.items():
-                # Распределяем оставшийся бюджет (минус исключенные)
-                # Чтобы сохранить точные пропорции, мы берем бюджет и исключаем pool_cash
-                # Но чтобы было проще, берем исходный alloc_rub заново, так как мы уже отфильтровали
                 alloc_rub = int(budget * ratio)
-                
-                # Если это единственный актив, вкидываем всю оставшуюся сумму
                 if len(final_alloc) == 1:
                     alloc_rub = budget
 
@@ -289,17 +265,13 @@ with tab2:
             st.success(f"✅ Портфель готов! Подобрано **{len(table_data)}** позиций.")
             st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
 
-            # Остаток бюджета (суммируем pool_cash и разницу между actual cost и alloc)
             leftover = budget - total_spent_rub
             if leftover > 0:
-                st.info(f"💰 Остаток (включая исключенные активы и комиссии): **{leftover:,.0f} ₽**. Рекомендуем оставить на комиссию брокера.")
+                st.info(f"💰 Остаток: **{leftover:,.0f} ₽**. Рекомендуем оставить на комиссию брокера.")
 
             # ПЛАН ДЕЙСТВИЙ
             st.divider()
             st.subheader("🧠 План действий от ИИ-советника")
-
-            # Здесь вы можете вставить вызов OpenAI. Сейчас используем алгоритмический советник.
-            st.markdown("**📋 Ваш персональный торговый план:**")
             plan_text = ""
             for row in table_data:
                 asset_name = row["Актив"]
@@ -309,15 +281,17 @@ with tab2:
                     price = float(price_str) if price_str != "-" else 0.0
                 except:
                     price = 0.0
-                
                 action = generate_action_plan(asset_name, price, risk_profile, alloc_amount)
                 plan_text += f"🔹 **{asset_name}**: \n{action}\n\n"
 
             st.markdown(plan_text)
-            st.caption("⚠️ *Совет: Если у вас есть доступ к OpenAI, замените алгоритмический блок на вызов API.*")
+            
+            # --- СОХРАНЯЕМ ПОРТФЕЛЬ ДЛЯ ВКЛАДКИ 4 ---
+            st.session_state.portfolio_data = table_data
+            st.session_state.portfolio_risk = risk_profile
 
 # ================================
-# Вкладка 3: Умный ИИ и прогноз
+# Вкладка 3: Умный ИИ и прогноз (ИСПРАВЛЕНА ОШИБКА 01.01.1970)
 # ================================
 with tab3:
     st.subheader("🤖 Прогноз сезонности и анализ прошлых аномалий")
@@ -362,7 +336,7 @@ with tab3:
                 st.plotly_chart(fig_pred, use_container_width=True)
 
                 st.divider()
-                st.subheader("📉 Анализ исторических провалов и взлетов")
+                st.subheader("📉 Анализ исторических провалов и взлетов (исправленные даты)")
                 daily_returns = pred_data['Close'].pct_change()
                 
                 if len(daily_returns) > 0:
@@ -371,18 +345,121 @@ with tab3:
 
                     st.markdown("**Дни самого сильного падения:**")
                     if not worst_days.empty:
-                        for date_str, pct in worst_days.items():
-                            date_formatted = pd.to_datetime(date_str).strftime("%d.%m.%Y")
+                        # ===== ИСПРАВЛЕНИЕ ОШИБКИ С ДАТАМИ =====
+                        for idx, pct in worst_days.items():
+                            real_date = pred_data.iloc[idx]['Date']
+                            date_formatted = real_date.strftime("%d.%m.%Y")
                             st.write(f"📉 {date_formatted}: падение на **{pct:.2%}**. *Примечание: часто это связано с выходом плохой отчетности или макроэкономическими новостями.*")
                     else:
                         st.write("Нет значительных падений.")
 
                     st.markdown("**Дни самого сильного роста:**")
                     if not best_days.empty:
-                        for date_str, pct in best_days.items():
-                            date_formatted = pd.to_datetime(date_str).strftime("%d.%m.%Y")
+                        # ===== ИСПРАВЛЕНИЕ ОШИБКИ С ДАТАМИ =====
+                        for idx, pct in best_days.items():
+                            real_date = pred_data.iloc[idx]['Date']
+                            date_formatted = real_date.strftime("%d.%m.%Y")
                             st.write(f"📈 {date_formatted}: рост на **{pct:.2%}**. *Примечание: обычно происходит на позитивных новостях или сильных квартальных отчетах.*")
                     else:
                         st.write("Нет значительных ростов.")
                 else:
                     st.write("Недостаточно данных для анализа.")
+
+# ================================
+# Вкладка 4: Чистая доходность и макро-риски (Новая вкладка)
+# ================================
+with tab4:
+    st.subheader("📊 Чистая доходность и макроэкономические риски")
+    
+    with st.expander("ℹ️ Как это работает и зачем это нужно"):
+        st.markdown("""
+        *   **Банковский вклад** дает фиксированный процент, защищает от инфляции, но **НЕ защищает от обвала рубля**. Если курс доллара завтра вырастет на 30%, ваши рубли в банке обесценятся на те же 30% в реальной покупательной способности.
+        *   **Наш портфель** содержит валюту и золото. Это даёт защиту от обесценивания рубля. В этой вкладке мы считаем реальную прибыль с учетом налогов.
+        *   *Важно:* Налог 13% на дивиденды и купоны по облигациям удерживается брокером автоматически. Мы учтем это в расчетах.
+        """)
+
+    st.subheader("1️⃣ Банковский вклад (ваш базовый вариант)")
+    col_bank, col_infl = st.columns(2)
+    with col_bank:
+        bank_rate = st.number_input("Ставка по вкладу (годовых, %)", min_value=0.0, max_value=30.0, value=18.0, step=0.5)
+    with col_infl:
+        inflation_rate = st.number_input("Ожидаемая инфляция (годовых, %)", min_value=0.0, max_value=50.0, value=8.5, step=0.5)
+
+    # Формула реальной доходности
+    real_bank_return = ((1 + bank_rate/100) / (1 + inflation_rate/100) - 1) * 100
+    st.metric(
+        label="Реальная доходность вклада (очищенная от инфляции)", 
+        value=f"{real_bank_return:.1f}%",
+        delta="Пассивный доход без риска девальвации"
+    )
+    st.caption("⚠️ Если рубль упадет (девальвация), банковский вклад потеряет покупательную способность.")
+
+    st.divider()
+
+    st.subheader("2️⃣ Ваш инвестиционный портфель (с учетом налога)")
+    
+    if st.session_state.portfolio_data is not None and len(st.session_state.portfolio_data) > 0:
+        st.success("✅ Портфель найден! Используются данные из вкладки «Портфель».")
+        
+        # Просим пользователя ввести ожидаемую доходность на 1 год
+        st.markdown("**Введите ваши ожидания по доходности на следующие 12 месяцев:**")
+        col_div, col_coup = st.columns(2)
+        with col_div:
+            exp_div_yield = st.number_input("Дивидендная доходность акций (%)", min_value=0.0, max_value=30.0, value=10.0, step=0.5)
+        with col_coup:
+            exp_coup_yield = st.number_input("Купонная доходность по ОФЗ (%)", min_value=0.0, max_value=30.0, value=16.0, step=0.5)
+
+        # Анализируем собранный портфель
+        portfolio_df = pd.DataFrame(st.session_state.portfolio_data)
+        
+        # Подсчет распределения активов
+        total_allocated_rub = portfolio_df['Выделено (₽)'].str.replace(' ', '').astype(float).sum()
+        stock_rub = 0.0
+        bond_rub = 0.0
+        gold_rub = 0.0
+        crypto_rub = 0.0
+        forex_rub = 0.0
+
+        for _, row in portfolio_df.iterrows():
+            name = row['Актив']
+            amount = float(str(row['Выделено (₽)']).replace(' ', ''))
+            if "ОФЗ" in name: bond_rub += amount
+            elif "Золото" in name or "GC=F" in name or "PL=F" in name: gold_rub += amount
+            elif "BTC" in name or "ETH" in name: crypto_rub += amount
+            elif "USD" in name or "CNY" in name or "EUR" in name: forex_rub += amount
+            else: stock_rub += amount
+
+        # Считаем номинальную доходность ПОД НАЛОГОМ (13%)
+        # Допустим, акции приносят exp_div_yield, облигации приносят exp_coup_yield, крипта и золото дают 0% стабильных выплат (только рост курса)
+        income_before_tax = (stock_rub * (exp_div_yield/100)) + (bond_rub * (exp_coup_yield/100))
+        tax_13 = income_before_tax * 0.13
+        income_after_tax = income_before_tax - tax_13
+        
+        # Номинальная доходность в процентах
+        if total_allocated_rub > 0:
+            nominal_yield_pct = (income_after_tax / total_allocated_rub) * 100
+            # Реальная доходность портфеля (с учетом инфляции)
+            real_portfolio_return = ((1 + nominal_yield_pct/100) / (1 + inflation_rate/100) - 1) * 100
+            
+            st.metric(
+                label="Реальная доходность портфеля после налога 13%", 
+                value=f"{real_portfolio_return:.1f}%",
+                delta=f"Чистый доход: ~{income_after_tax:,.0f} ₽"
+            )
+            st.write(f"Налог 13%, удержанный брокером, уже включен в расчеты.")
+    else:
+        st.info("👈 Сначала соберите портфель во вкладке «Портфель», затем возвращайтесь сюда для расчёта чистой прибыли.")
+    
+    st.divider()
+    st.subheader("🛡️ Анализ рисков: Девальвация и Дефолт")
+    st.markdown("""
+    **1. Риск девальвации (обвала рубля):**
+    Если вы держите все деньги в рублях (вклад), обвал курса на 20% превратит вашу реальную доходность в -20% за один день. 
+    *Решение:* В нашем портфеле 30-40% выделено на доллар, юань и золото. При обвале рубля эти активы взлетают в цене в рублях и компенсируют потери.
+
+    **2. Риск дефолта (краха банка или государства):**
+    Вклад до 1,4 млн ₽ застрахован государством (АСВ) — это значит, что деньги вернут.
+    *Решение:* Держать деньги свыше 1,4 млн рублей в одном банке опасно. Наш портфель распределяет деньги между разными активами, снижая риск потери капитала до минимума.
+
+    **Итог:** Банковский вклад — это хорошая подушка безопасности на короткий срок (1 год), но для долгосрочной защиты сбережений в России сегодня важен портфель, включающий валюту и драгоценные металлы. Ваше приложение считает именно так!
+    """)
