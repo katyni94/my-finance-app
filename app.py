@@ -126,42 +126,46 @@ with tab1:
         st.plotly_chart(fig, use_container_width=True)
 
 # ================================
-# Вкладка 2: Конкретный портфель по бюджету
+# Вкладка 2: Конкретный портфель по бюджету (исправлена ошибка)
 # ================================
 with tab2:
     st.subheader("💼 Конкретный портфель по вашему бюджету")
-    st.info("Алгоритм рассчитает точное количество акций/активов для покупки по текущим рыночным ценам. Для USD-активов конвертация происходит по текущему курсу.")
+    st.info("Алгоритм рассчитает точное количество активов для покупки по текущим рыночным ценам. Для USD-активов конвертация происходит по текущему курсу.")
 
     budget = st.number_input("Введите бюджет (₽)", min_value=1000, value=100000, step=5000)
     risk_profile = st.selectbox("Профиль риска", ["Консервативный (Низкий риск)", "Сбалансированный (Средний риск)", "Агрессивный (Максимальный доход)"])
 
     if st.button("Собрать идеальный портфель"):
         with st.spinner("Загружаем актуальные цены для расчета..."):
-            prices = {}
+            # Список тикеров, которые участвуют в портфелях
+            tickers_to_check = ["GC=F", "BTC-USD", "NVDA", "SBER", "USDRUB=X", "CNYRUB=X", "SU26227RMFS4"]
             
-            # Для расчета нам нужно получить курс доллара к рублю для пересчета USD-активов
+            # Инициализируем цены нулями, чтобы избежать ошибок типа None/NaN
+            prices = {t: 0.0 for t in tickers_to_check}
+            usd_rub_price = 90.0 # Заглушка
+
+            # Получаем курс доллара
             usd_rub_data = yf.download("USDRUB=X", period="1d", progress=False)
             if not usd_rub_data.empty:
-                usd_rub_price = usd_rub_data['Close'].iloc[-1]
-            else:
-                usd_rub_price = 90.0 # Заглушка, если API не ответил
+                if isinstance(usd_rub_data.columns, pd.MultiIndex): usd_rub_data.columns = usd_rub_data.columns.droplevel(1)
+                usd_rub_price = float(usd_rub_data['Close'].iloc[-1])
 
-            # Получаем цены на все активы, участвующие в портфеле
-            tickers_to_check = ["GC=F", "BTC-USD", "NVDA", "SBER", "USDRUB=X", "CNYRUB=X", "SU26227RMFS4"]
+            # Получаем цены на все активы портфеля
             for t in tickers_to_check:
                 try:
-                    if t == "SBER" or t == "SU26227RMFS4": # Российские
+                    if t == "SBER" or t == "SU26227RMFS4": # Российские активы
                         df = get_moex_data(t, 2)
-                        prices[t] = df['Close'].iloc[-1] if df is not None else 0
-                    else: # Остальные (идут в USD)
+                        if df is not None and not df.empty:
+                            val = df['Close'].iloc[-1]
+                            prices[t] = float(val) if not pd.isna(val) else 0.0
+                    else: # Остальные (идут в USD, включая металлы и крипту)
                         df = yf.download(t, period="1d", progress=False)
                         if not df.empty:
                             if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)
-                            prices[t] = df['Close'].iloc[-1]
-                        else:
-                            prices[t] = 0
+                            val = df['Close'].iloc[-1]
+                            prices[t] = float(val) if not pd.isna(val) else 0.0
                 except:
-                    prices[t] = 0
+                    prices[t] = 0.0 # Если произошла ошибка загрузки
 
             # Логика распределения
             asset_alloc = {}
@@ -204,22 +208,28 @@ with tab2:
             for name, ratio in asset_alloc.items():
                 alloc_rub = int(budget * ratio)
                 ticker_code = name.split("(")[1].replace(")", "")
-                price = prices.get(ticker_code, 0)
+                price = float(prices.get(ticker_code, 0.0))
                 
                 qty_to_buy = 0.0
                 actual_cost_rub = 0.0
-                display_qty = "0"
+                display_qty = "Нет данных"
+                display_price = f"-"
 
-                if price and price > 0:
-                    # Проверяем в какой валюте торгуется актив
+                # Если цена больше 0, рассчитываем кол-во
+                if price > 0.0:
+                    display_price = f"{price:.2f}"
                     meta = next((v for k, v in ASSETS_DB.items() if v["ticker"] == ticker_code), None)
+                    
                     if meta and meta["currency"] == "USD":
                         # Для USD-активов переводим рубли в доллары
                         alloc_usd = alloc_rub / usd_rub_price
                         qty_to_buy = alloc_usd / price
                         actual_cost_usd = qty_to_buy * price
                         actual_cost_rub = actual_cost_usd * usd_rub_price
-                        # Выводим количество в долларах
+
+                        # Проверяем, чтобы число было конечным (не NaN и не Inf)
+                        if not np.isfinite(qty_to_buy): qty_to_buy = 0.0
+                        
                         if "BTC" in ticker_code:
                             display_qty = f"{qty_to_buy:.6f} BTC"
                         elif "GC=F" in ticker_code or "SI=F" in ticker_code or "PL=F" in ticker_code:
@@ -227,26 +237,27 @@ with tab2:
                         else:
                             display_qty = f"{qty_to_buy:.4f} шт."
                     else:
-                        # Для RUB-активов (Сбер, ОФЗ, Валюты)
+                        # Для RUB-активов
+                        qty_to_buy = alloc_rub / price
+                        actual_cost_rub = qty_to_buy * price
+                        
+                        if not np.isfinite(qty_to_buy): qty_to_buy = 0.0
+                        
                         if "USDRUB" in ticker_code or "EURRUB" in ticker_code or "CNYRUB" in ticker_code:
-                            qty_to_buy = alloc_rub / price
-                            actual_cost_rub = qty_to_buy * price
                             display_qty = f"{qty_to_buy:.2f} ед."
                         else:
-                            qty_to_buy = alloc_rub / price
-                            actual_cost_rub = qty_to_buy * price
                             display_qty = f"{qty_to_buy:.2f} шт."
                 else:
-                    actual_cost_rub = 0
+                    actual_cost_rub = 0.0
+                    display_qty = "⚠️ Цена не загружена"
 
-                # Округляем сумму до 2 знаков
                 total_spent_rub += actual_cost_rub
 
                 table_data.append({
                     "Актив": name,
                     "Доля": f"{int(ratio*100)}%",
                     "Выделено (₽)": f"{alloc_rub:,.0f}",
-                    "Цена за ед.": f"{price:.2f}",
+                    "Цена за ед.": display_price,
                     "Нужно купить": display_qty,
                     "Факт. затраты (₽)": f"{actual_cost_rub:,.2f}"
                 })
