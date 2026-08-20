@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import requests
+import re  # ДОБАВЛЕНО ДЛЯ БЕЗОПАСНОГО УДАЛЕНИЯ ВСЕХ ПРОБЕЛОВ
 from datetime import datetime, timedelta
 from prophet import Prophet
 
@@ -432,8 +433,13 @@ with tab4:
 
         for _, row in portfolio_df.iterrows():
             name = row['Актив']
-            # Безопасная конвертация суммы в строку и удаление лишнего
-            amount = float(str(row['Выделено (₽)']).replace(' ', ''))
+            
+            # === ИСПРАВЛЕНИЕ ОШИБКИ НА СТРОКЕ 436 ===
+            # Безопасная конвертация суммы в строку и удаление абсолютно всех пробельных символов (включая неразрывные)
+            cleaned_str = re.sub(r'\s+', '', str(row['Выделено (₽)']))
+            amount = float(cleaned_str) if cleaned_str else 0.0
+            # ========================================
+
             if "ОФЗ" in name: bond_rub += amount
             elif "Золото" in name or "GC=F" in name or "PL=F" in name: gold_rub += amount
             elif "BTC" in name or "ETH" in name: crypto_rub += amount
