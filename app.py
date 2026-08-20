@@ -16,33 +16,36 @@ st.markdown("Анализ акций РФ/США, облигаций, крипт
 def get_moex_data(ticker, period_days=365):
     """Загружает данные с официального API MOEX."""
     try:
-        # Кол-во свечей для запроса. Берем побольше, чтобы покрыть год
-        url = f'https://iss.moex.com/iss/engines/stock/markets/shares/securities/{ticker}.json'
+        end = datetime.now()
+        start = end - timedelta(days=period_days)
+        url = f'https://iss.moex.com/iss/engines/stock/markets/shares/securities/{ticker}/candles.json'
         params = {
-            'iss.only': 'candles',
-            'interval': 24, # Дневные свечи
-            'from': (datetime.now() - timedelta(days=period_days)).strftime('%Y-%m-%d'),
-            'till': datetime.now().strftime('%Y-%m-%d')
+            'from': start.strftime('%Y-%m-%d'),
+            'till': end.strftime('%Y-%m-%d'),
+            'interval': 24,
+            'iss.only': 'candles'
         }
         r = requests.get(url, params=params).json()
-        candles = r['candles']['data']
         
-        if not candles:
+        if 'candles' not in r or 'data' not in r['candles'] or not r['candles']['data']:
             return None
             
-        df = pd.DataFrame(candles, columns=r['candles']['columns'])
-        df['Date'] = pd.to_datetime(df['begin'], utc=True).dt.tz_convert('Europe/Moscow')
-        # Формируем стандартный формат для графика
-        df = df[['Date', 'open', 'high', 'low', 'close', 'value']]
-        df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'value': 'Volume'}, inplace=True)
+        candles = r['candles']['data']
+        columns = r['candles']['columns']
+        df = pd.DataFrame(candles, columns=columns)
+        
+        # Оставляем только нужные колонки
+        df = df[['begin', 'open', 'close', 'high', 'low', 'volume']]
+        df.rename(columns={'begin': 'Date', 'open': 'Open', 'close': 'Close', 'high': 'High', 'low': 'Low', 'volume': 'Volume'}, inplace=True)
+        df['Date'] = pd.to_datetime(df['Date'])
         df.sort_values('Date', inplace=True)
         return df
-    except:
+    except Exception as e:
         return None
 
 # ================= БАЗА ДАННЫХ АКТИВОВ =================
 ASSETS_DB = {
-    # Акции РФ (Будут грузиться через MOEX)
+    # Акции РФ
     "Сбербанк (SBER)": {"ticker": "SBER", "type": "Акция РФ", "risk": "Низкий", "market": "Мосбиржа"},
     "Лукойл (LKOH)": {"ticker": "LKOH", "type": "Акция РФ", "risk": "Средний", "market": "Мосбиржа"},
     "Газпром (GAZP)": {"ticker": "GAZP", "type": "Акция РФ", "risk": "Низкий", "market": "Мосбиржа"},
@@ -61,17 +64,15 @@ ASSETS_DB = {
     "Биткоин (BTC-USD)": {"ticker": "BTC-USD", "type": "Криптовалюта", "risk": "Очень высокий", "market": "Крипто"},
     "Эфириум (ETH-USD)": {"ticker": "ETH-USD", "type": "Криптовалюта", "risk": "Очень высокий", "market": "Крипто"},
 
-    # Валюты (к рублю)
+    # Валюты
     "Доллар США (USDRUB)": {"ticker": "USDRUB=X", "type": "Валюта", "risk": "Средний", "market": "Валютный"},
     "Евро (EURRUB)": {"ticker": "EURRUB=X", "type": "Валюта", "risk": "Средний", "market": "Валютный"},
     "Китайский юань (CNYRUB)": {"ticker": "CNYRUB=X", "type": "Валюта", "risk": "Средний", "market": "Валютный"},
-    "Японская иена (JPYUSD)": {"ticker": "JPYUSD=X", "type": "Валюта", "risk": "Низкий", "market": "Валютный"},
 
     # Драгметаллы
     "Золото (GC=F)": {"ticker": "GC=F", "type": "Металл", "risk": "Низкий", "market": "Сырье"},
     "Серебро (SI=F)": {"ticker": "SI=F", "type": "Металл", "risk": "Средний", "market": "Сырье"},
     "Платина (PL=F)": {"ticker": "PL=F", "type": "Металл", "risk": "Средний", "market": "Сырье"},
-    "Палладий (PA=F)": {"ticker": "PA=F", "type": "Металл", "risk": "Высокий", "market": "Сырье"},
 }
 
 # --- Интерфейс ---
@@ -85,42 +86,60 @@ with tab1:
     meta = ASSETS_DB[asset_name]
     ticker = meta["ticker"]
     is_russian = meta["market"] == "Мосбиржа"
+    currency = "₽" if is_russian else "$"
 
-    period_text = "1y" if not is_russian else "Год"
     st.caption(f"Рынок: {meta['market']} | Риск: {meta['risk']}")
 
     with st.spinner(f"Загружаем данные для {asset_name}..."):
-        # Выбор источника данных
+        data = None
+        # 1. Попытка загрузить российские акции
         if is_russian:
             data = get_moex_data(ticker, period_days=365)
-            currency = "₽"
+            if data is None or data.empty:
+                # Запасной вариант через Yahoo Finance (с суффиксом .ME)
+                st.warning("⚠️ Официальный API Мосбиржи временно недоступен. Данные загружаются через Yahoo Finance (могут быть ограничения по периодам).")
+                ticker_yahoo = f"{ticker}.ME"
+                data = yf.download(ticker_yahoo, period="1y", progress=False)
+                if not data.empty:
+                    if isinstance(data.columns, pd.MultiIndex):
+                        data.columns = data.columns.droplevel(1)
+                    data = data.reset_index()
         else:
-            # Для валютных пар и металлов из Yahoo
+            # 2. Загрузка валют, металлов и США
             data = yf.download(ticker, period="1y", progress=False)
-            currency = "₽" if "RUB" in ticker else "$"
+            if not data.empty:
+                if isinstance(data.columns, pd.MultiIndex):
+                    data.columns = data.columns.droplevel(1)
+                data = data.reset_index()
 
+        # 3. Проверка на пустые данные (чтобы убрать TypeError)
         if data is None or data.empty:
-            st.error("❌ Не удалось загрузить данные по этому активу. Скорее всего, тикер отсутствует на выбранной бирже.")
-        else:
-            # Формируем метрики
-            latest = data['Close'].iloc[-1]
-            first = data['Close'].iloc[0]
-            delta = latest - first
+            st.error("❌ Не удалось загрузить данные по этому активу. Проверьте интернет или выберите другой тикер.")
+            st.stop() # Полностью останавливаем вкладку, чтобы не было ошибок ниже
 
-            c1, c2, c3 = st.columns(3)
-            c1.metric(f"Цена", f"{currency}{latest:.2f}", f"{currency}{delta:.2f}")
-            c2.metric("Максимум", f"{currency}{data['High'].max():.2f}")
-            c3.metric("Минимум", f"{currency}{data['Low'].min():.2f}")
+        # Вычисляем метрики (с проверкой на NaN)
+        latest = data['Close'].iloc[-1]
+        first = data['Close'].iloc[0]
+        delta = latest - first
+        
+        # Если данные всё же NaN (бывает с Yahoo на 5-летних периодах) - обнуляем
+        if pd.isna(latest): latest = 0.0
+        if pd.isna(delta): delta = 0.0
 
-            # Свечной график
-            fig = go.Figure(data=[go.Candlestick(
-                x=data['Date'], open=data['Open'], high=data['High'],
-                low=data['Low'], close=data['Close'],
-                name="Цена"
-            )])
-            fig.update_layout(title=f"{asset_name} — График цены", xaxis_title="Дата", yaxis_title=f"Цена ({currency})",
-                              hovermode="x unified", xaxis_tickformat="%d %b %Y")
-            st.plotly_chart(fig, use_container_width=True)
+        c1, c2, c3 = st.columns(3)
+        c1.metric(f"Цена", f"{currency}{latest:.2f}", f"{currency}{delta:.2f}")
+        c2.metric("Максимум", f"{currency}{data['High'].max():.2f}")
+        c3.metric("Минимум", f"{currency}{data['Low'].min():.2f}")
+
+        # Свечной график
+        fig = go.Figure(data=[go.Candlestick(
+            x=data['Date'], open=data['Open'], high=data['High'],
+            low=data['Low'], close=data['Close'],
+            name="Цена"
+        )])
+        fig.update_layout(title=f"{asset_name} — График цены", xaxis_title="Дата", yaxis_title=f"Цена ({currency})",
+                          hovermode="x unified", xaxis_tickformat="%d %b %Y")
+        st.plotly_chart(fig, use_container_width=True)
 
 # ================================
 # Вкладка 2: Широкий портфель по бюджету
@@ -133,18 +152,25 @@ with tab2:
     risk_profile = st.selectbox("Профиль риска", ["Консервативный (Низкий риск)", "Сбалансированный (Средний риск)", "Агрессивный (Максимальный доход)"])
 
     if st.button("Собрать идеальный портфель"):
-        # Получаем актуальные цены. В реальном продукте тут должны быть асинхронные запросы.
-        # Для прототипа берем упрощенно.
+        # Упрощенный сбор цен для вычислений (делаем защиту от ошибок)
         prices = {}
         tickers_to_check = ["GC=F", "BTC-USD", "NVDA", "SBER", "USDRUB=X", "CNYRUB=X", "SU26227RMFS4"]
         for t in tickers_to_check:
-            if t == "SBER":
-                df = get_moex_data(t, 1) # берем последний день
-                prices[t] = df['Close'].iloc[-1] if df is not None else 300
-            else:
-                df = yf.download(t, period="1d", progress=False)
-                prices[t] = df['Close'].iloc[-1] if not df.empty else 0
-        
+            try:
+                if t == "SBER":
+                    df = get_moex_data(t, 2) # берем последние дни
+                    prices[t] = df['Close'].iloc[-1] if df is not None else 300
+                else:
+                    df = yf.download(t, period="1d", progress=False)
+                    if not df.empty:
+                        if isinstance(df.columns, pd.MultiIndex):
+                            df.columns = df.columns.droplevel(1)
+                        prices[t] = df['Close'].iloc[-1]
+                    else:
+                        prices[t] = 0
+            except:
+                prices[t] = 0 # Заглушка, если не загрузилось
+
         # Логика распределения
         asset_alloc = {}
         if risk_profile == "Консервативный (Низкий риск)":
@@ -181,8 +207,6 @@ with tab2:
         table_data = []
         for name, ratio in asset_alloc.items():
             alloc_amount = int(budget * ratio)
-            # Подбираем тикер к названию
-            ticker_mock = list(prices.keys())[list(ASSETS_DB.keys()).index(name) % len(prices)] 
             table_data.append({"Актив": name, "Доля": f"{int(ratio*100)}%", "Сумма": f"{alloc_amount:,.0f} ₽"})
         
         st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
@@ -200,17 +224,24 @@ with tab3:
 
     if st.button("Запустить ИИ-анализ (с сезонностью)"):
         with st.spinner("Модель Prophet рассчитывает сезонные тренды..."):
-            # Загружаем данные для анализа (нужен минимум 180 дней для работы модели)
+            pred_data = None
             if pred_russian:
                 pred_data = get_moex_data(pred_ticker, 500)
+                # Если Мосбиржа падает, пробуем Yahoo на месяц
+                if pred_data is None or pred_data.empty:
+                    pred_data = yf.download(f"{pred_ticker}.ME", period="1mo", progress=False)
+                    if not pred_data.empty and isinstance(pred_data.columns, pd.MultiIndex):
+                        pred_data.columns = pred_data.columns.droplevel(1)
+                        pred_data = pred_data.reset_index()
             else:
                 pred_data = yf.download(pred_ticker, period="1y", progress=False)
-                if isinstance(pred_data.columns, pd.MultiIndex):
-                    pred_data.columns = pred_data.columns.droplevel(1)
-                pred_data = pred_data.reset_index()
+                if not pred_data.empty:
+                    if isinstance(pred_data.columns, pd.MultiIndex):
+                        pred_data.columns = pred_data.columns.droplevel(1)
+                    pred_data = pred_data.reset_index()
 
             if pred_data is None or pred_data.empty:
-                st.error("Недостаточно данных для построения прогноза.")
+                st.error("Недостаточно данных для построения прогноза по данному активу.")
             else:
                 # 1. ПОДГОТОВКА ДАННЫХ ДЛЯ PROPHET
                 df_prophet = pred_data[['Date', 'Close']].rename(columns={'Date': 'ds', 'Close': 'y'})
@@ -248,5 +279,3 @@ with tab3:
                 for date_str, pct in best_days.items():
                     date_formatted = date_str.strftime("%d.%m.%Y")
                     st.write(f"📈 {date_formatted}: рост на **{pct:.2%}**. *Примечание: обычно это происходит на позитивных новостях, сильных квартальных отчетах или в ожидании снижения ключевой ставки.*")
-
-                st.info("🧠 *Как сделать ИИ еще умнее? Текущий прогноз использует математику и сезонность (Prophet). Чтобы он искал новости в интернете и давал причину падения/роста, нужно подключить внешний API (например, OpenAI/Gemini или NewsAPI). Я оставил для этого место в коде.*")
