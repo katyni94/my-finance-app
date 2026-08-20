@@ -8,14 +8,23 @@ st.title("📈 Мой финансовый дашборд")
 
 ticker = st.text_input("Введите тикер (например, AAPL, GOOGL, SBER.ME)", "AAPL")
 
-try:
-    data = yf.download(ticker, period="6mo", interval="1d", auto_adjust=False)
+@st.cache_data(ttl=3600)  # кэшируем на час
+def load_data(ticker):
+    try:
+        data = yf.download(ticker, period="6mo", interval="1d", progress=False, auto_adjust=False)
+        return data
+    except Exception as e:
+        st.error(f"Ошибка загрузки данных: {e}")
+        return None
+
+if ticker:
+    data = load_data(ticker)
     
-    if not data.empty:
-        col1, col2, col3, col4 = st.columns(4)
+    if data is not None and not data.empty:
         close = data['Close']
         last_close = close.iloc[-1]
         
+        col1, col2, col3, col4 = st.columns(4)
         col1.metric("Последняя цена", f"${last_close:.2f}")
         col2.metric("Максимум", f"${data['High'].iloc[-1]:.2f}")
         col3.metric("Минимум", f"${data['Low'].iloc[-1]:.2f}")
@@ -24,6 +33,6 @@ try:
         fig = px.line(data, x=data.index, y="Close", title=f"{ticker} — цена закрытия")
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.error("Тикер не найден. Попробуйте другой.")
-except Exception as e:
-    st.error(f"Ошибка: {e}")
+        st.error("Тикер не найден или данные недоступны. Попробуйте другой тикер (например, AAPL, GOOGL, SBER.ME).")
+else:
+    st.info("Введите тикер в поле выше.")
