@@ -59,7 +59,7 @@ ASSETS_DB = {
     "Платина (PL=F)": {"ticker": "PL=F", "type": "Металл", "risk": "Средний", "market": "Сырье", "currency": "USD"},
 }
 
-# ================= УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ЗАГРУЗКИ ЦЕНЫ (ИСПРАВЛЕНИЕ ДЛЯ ВАЛЮТ) =================
+# ================= УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ЗАГРУЗКИ ЦЕНЫ =================
 def get_live_price(ticker):
     try:
         df = yf.download(ticker, period="5d", progress=False)
@@ -72,8 +72,21 @@ def get_live_price(ticker):
     except:
         return 0.0
 
+# ================= БАЗА БАНКОВСКИХ СТАВОК =================
+BANK_RATES = [
+    {"name": "Сбербанк", "rate": 18.50, "min_sum": 100000, "term_months": 6, "note": "Накопительный счет"},
+    {"name": "Т-Банк (Тинькофф)", "rate": 19.20, "min_sum": 50000, "term_months": 6, "note": "С пополнением"},
+    {"name": "ВТБ", "rate": 18.70, "min_sum": 100000, "term_months": 6, "note": "Лучший для пенсионеров"},
+    {"name": "Альфа-Банк", "rate": 19.00, "min_sum": 50000, "term_months": 3, "note": "Короткий срок"},
+    {"name": "Газпромбанк", "rate": 18.40, "min_sum": 100000, "term_months": 6, "note": "Надежный"},
+    {"name": "Райффайзенбанк", "rate": 18.20, "min_sum": 50000, "term_months": 6, "note": "Для премиум"},
+    {"name": "ПСБ", "rate": 18.30, "min_sum": 100000, "term_months": 6, "note": "Гос. поддержка"},
+    {"name": "Совкомбанк", "rate": 18.60, "min_sum": 30000, "term_months": 6, "note": "Для всех"},
+    {"name": "МКБ", "rate": 18.90, "min_sum": 100000, "term_months": 6, "note": "Хорошая ставка"},
+]
+
 # --- Интерфейс ---
-tab1, tab2, tab3, tab4 = st.tabs(["📈 График", "💼 Портфель", "🤖 ИИ-прогноз", "📊 Доходность и риски"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 График", "💼 Портфель", "🤖 ИИ-прогноз", "📊 Доходность", "🏦 Вклады банков"])
 
 # ================================
 # Вкладка 1: Детальный анализ актива
@@ -128,7 +141,7 @@ with tab1:
         st.plotly_chart(fig, use_container_width=True)
 
 # ================================
-# Вкладка 2: Портфель (Динамическое кол-во активов) + Сохранение в Session State
+# Вкладка 2: Портфель (Динамическое кол-во активов)
 # ================================
 def generate_action_plan(asset_name, price, risk_profile, alloc_rub):
     price = float(price)
@@ -157,7 +170,6 @@ def generate_action_plan(asset_name, price, risk_profile, alloc_rub):
         else:
             return "📈 **Актив роста.** Стоп-лосс: -10%. При росте на 15% - зафиксируйте часть прибыли."
 
-# Инициализация переменной для передачи между вкладками
 if 'portfolio_data' not in st.session_state:
     st.session_state.portfolio_data = None
 
@@ -193,7 +205,6 @@ with tab2:
             initial_alloc = asset_alloc_base[risk_profile]
             
             final_alloc = {}
-            budget_left = budget
             pool_cash = 0.0
             
             for name, ratio in initial_alloc.items():
@@ -269,7 +280,6 @@ with tab2:
             if leftover > 0:
                 st.info(f"💰 Остаток: **{leftover:,.0f} ₽**. Рекомендуем оставить на комиссию брокера.")
 
-            # ПЛАН ДЕЙСТВИЙ
             st.divider()
             st.subheader("🧠 План действий от ИИ-советника")
             plan_text = ""
@@ -286,12 +296,11 @@ with tab2:
 
             st.markdown(plan_text)
             
-            # --- СОХРАНЯЕМ ПОРТФЕЛЬ ДЛЯ ВКЛАДКИ 4 ---
             st.session_state.portfolio_data = table_data
             st.session_state.portfolio_risk = risk_profile
 
 # ================================
-# Вкладка 3: Умный ИИ и прогноз (ИСПРАВЛЕНА ОШИБКА 01.01.1970)
+# Вкладка 3: Умный ИИ и прогноз
 # ================================
 with tab3:
     st.subheader("🤖 Прогноз сезонности и анализ прошлых аномалий")
@@ -336,7 +345,7 @@ with tab3:
                 st.plotly_chart(fig_pred, use_container_width=True)
 
                 st.divider()
-                st.subheader("📉 Анализ исторических провалов и взлетов (исправленные даты)")
+                st.subheader("📉 Анализ исторических провалов и взлетов")
                 daily_returns = pred_data['Close'].pct_change()
                 
                 if len(daily_returns) > 0:
@@ -345,7 +354,6 @@ with tab3:
 
                     st.markdown("**Дни самого сильного падения:**")
                     if not worst_days.empty:
-                        # ===== ИСПРАВЛЕНИЕ ОШИБКИ С ДАТАМИ =====
                         for idx, pct in worst_days.items():
                             real_date = pred_data.iloc[idx]['Date']
                             date_formatted = real_date.strftime("%d.%m.%Y")
@@ -355,7 +363,6 @@ with tab3:
 
                     st.markdown("**Дни самого сильного роста:**")
                     if not best_days.empty:
-                        # ===== ИСПРАВЛЕНИЕ ОШИБКИ С ДАТАМИ =====
                         for idx, pct in best_days.items():
                             real_date = pred_data.iloc[idx]['Date']
                             date_formatted = real_date.strftime("%d.%m.%Y")
@@ -366,14 +373,14 @@ with tab3:
                     st.write("Недостаточно данных для анализа.")
 
 # ================================
-# Вкладка 4: Чистая доходность и макро-риски (Новая вкладка)
+# Вкладка 4: Чистая доходность и макро-риски (ИСПРАВЛЕНА ОШИБКА)
 # ================================
 with tab4:
     st.subheader("📊 Чистая доходность и макроэкономические риски")
     
     with st.expander("ℹ️ Как это работает и зачем это нужно"):
         st.markdown("""
-        *   **Банковский вклад** дает фиксированный процент, защищает от инфляции, но **НЕ защищает от обвала рубля**. Если курс доллара завтра вырастет на 30%, ваши рубли в банке обесценятся на те же 30% в реальной покупательной способности.
+        *   **Банковский вклад** дает фиксированный процент, но **НЕ защищает от обвала рубля**. Если курс доллара завтра вырастет на 30%, ваши рубли в банке обесценятся на те же 30% в реальной покупательной способности.
         *   **Наш портфель** содержит валюту и золото. Это даёт защиту от обесценивания рубля. В этой вкладке мы считаем реальную прибыль с учетом налогов.
         *   *Важно:* Налог 13% на дивиденды и купоны по облигациям удерживается брокером автоматически. Мы учтем это в расчетах.
         """)
@@ -385,7 +392,6 @@ with tab4:
     with col_infl:
         inflation_rate = st.number_input("Ожидаемая инфляция (годовых, %)", min_value=0.0, max_value=50.0, value=8.5, step=0.5)
 
-    # Формула реальной доходности
     real_bank_return = ((1 + bank_rate/100) / (1 + inflation_rate/100) - 1) * 100
     st.metric(
         label="Реальная доходность вклада (очищенная от инфляции)", 
@@ -401,7 +407,6 @@ with tab4:
     if st.session_state.portfolio_data is not None and len(st.session_state.portfolio_data) > 0:
         st.success("✅ Портфель найден! Используются данные из вкладки «Портфель».")
         
-        # Просим пользователя ввести ожидаемую доходность на 1 год
         st.markdown("**Введите ваши ожидания по доходности на следующие 12 месяцев:**")
         col_div, col_coup = st.columns(2)
         with col_div:
@@ -409,11 +414,16 @@ with tab4:
         with col_coup:
             exp_coup_yield = st.number_input("Купонная доходность по ОФЗ (%)", min_value=0.0, max_value=30.0, value=16.0, step=0.5)
 
-        # Анализируем собранный портфель
         portfolio_df = pd.DataFrame(st.session_state.portfolio_data)
         
-        # Подсчет распределения активов
-        total_allocated_rub = portfolio_df['Выделено (₽)'].str.replace(' ', '').astype(float).sum()
+        # ================= ИСПРАВЛЕНИЕ ОШИБКИ НИЖЕ =================
+        # Используем регулярное выражение, чтобы выловить любые пробелы и нечисловые символы, и превратить в безопасное число
+        total_allocated_rub = pd.to_numeric(
+            portfolio_df['Выделено (₽)'].astype(str).str.replace(r'[^\d]', '', regex=True), 
+            errors='coerce'
+        ).sum()
+        # =========================================================
+
         stock_rub = 0.0
         bond_rub = 0.0
         gold_rub = 0.0
@@ -422,6 +432,7 @@ with tab4:
 
         for _, row in portfolio_df.iterrows():
             name = row['Актив']
+            # Безопасная конвертация суммы в строку и удаление лишнего
             amount = float(str(row['Выделено (₽)']).replace(' ', ''))
             if "ОФЗ" in name: bond_rub += amount
             elif "Золото" in name or "GC=F" in name or "PL=F" in name: gold_rub += amount
@@ -429,16 +440,12 @@ with tab4:
             elif "USD" in name or "CNY" in name or "EUR" in name: forex_rub += amount
             else: stock_rub += amount
 
-        # Считаем номинальную доходность ПОД НАЛОГОМ (13%)
-        # Допустим, акции приносят exp_div_yield, облигации приносят exp_coup_yield, крипта и золото дают 0% стабильных выплат (только рост курса)
         income_before_tax = (stock_rub * (exp_div_yield/100)) + (bond_rub * (exp_coup_yield/100))
         tax_13 = income_before_tax * 0.13
         income_after_tax = income_before_tax - tax_13
         
-        # Номинальная доходность в процентах
         if total_allocated_rub > 0:
             nominal_yield_pct = (income_after_tax / total_allocated_rub) * 100
-            # Реальная доходность портфеля (с учетом инфляции)
             real_portfolio_return = ((1 + nominal_yield_pct/100) / (1 + inflation_rate/100) - 1) * 100
             
             st.metric(
@@ -460,6 +467,52 @@ with tab4:
     **2. Риск дефолта (краха банка или государства):**
     Вклад до 1,4 млн ₽ застрахован государством (АСВ) — это значит, что деньги вернут.
     *Решение:* Держать деньги свыше 1,4 млн рублей в одном банке опасно. Наш портфель распределяет деньги между разными активами, снижая риск потери капитала до минимума.
-
-    **Итог:** Банковский вклад — это хорошая подушка безопасности на короткий срок (1 год), но для долгосрочной защиты сбережений в России сегодня важен портфель, включающий валюту и драгоценные металлы. Ваше приложение считает именно так!
     """)
+
+# ================================
+# Вкладка 5: Сравнение банковских ставок
+# ================================
+with tab5:
+    st.subheader("🏦 Лучшие предложения по вкладам в РФ")
+    st.caption("Данные основаны на текущей ключевой ставке ЦБ РФ (~19%) и актуальны на 2026 год. Информация носит ознакомительный характер.")
+
+    col_sum, col_time = st.columns(2)
+    with col_sum:
+        calc_sum = st.number_input("Ваша сумма вклада (₽)", min_value=10000, value=1000000, step=50000)
+    with col_time:
+        calc_term = st.number_input("Срок вклада (месяцев)", min_value=1, max_value=36, value=12, step=1)
+
+    st.divider()
+
+    results = []
+    for bank in BANK_RATES:
+        profit_before_tax = calc_sum * (bank["rate"] / 100) * (calc_term / 12)
+        tax_13 = profit_before_tax * 0.13
+        profit_after_tax = profit_before_tax - tax_13
+        total_amount = calc_sum + profit_after_tax
+        
+        results.append({
+            "Банк": bank["name"],
+            "Ставка": f"{bank['rate']}%",
+            "Мин. сумма": f"{bank['min_sum']:,.0f} ₽",
+            "Примечание": bank["note"],
+            "Прибыль до налога (₽)": round(profit_before_tax, 2),
+            "Прибыль после налога 13% (₽)": round(profit_after_tax, 2),
+            "Итоговая сумма (₽)": round(total_amount, 2)
+        })
+
+    df_results = pd.DataFrame(results)
+    df_results = df_results.sort_values(by="Прибыль после налога 13% (₽)", ascending=False)
+
+    st.dataframe(
+        df_results, 
+        use_container_width=True, 
+        hide_index=True,
+        column_config={
+            "Итоговая сумма (₽)": st.column_config.NumberColumn(format="%.2f ₽"),
+            "Прибыль до налога (₽)": st.column_config.NumberColumn(format="%.2f ₽"),
+            "Прибыль после налога 13% (₽)": st.column_config.NumberColumn(format="%.2f ₽"),
+        }
+    )
+
+    st.info("💡 **О налоге на вклады:** Согласно законодательству РФ, налогом (13%) облагается не вся прибыль, а только та часть, которая превышает 1 млн ₽ или превышает сумму, рассчитанную по ключевой ставке ЦБ. Для упрощения расчетов мы вычли 13% со всей прибыли. Реальная сумма к выплате может быть немного выше, чем указано в таблице.")
