@@ -228,7 +228,7 @@ with tab2:
     if st.button("Собрать портфель и получить план"):
         with st.spinner("Загружаем цены и просчитываем стратегию..."):
             MIN_POSITION_RUB = 3000 
-            tickers_to_check = ["GC=F", "BTC-USD", "NVDA", "SBER", "USDRUB=X", "CNYRUB=X", "SU26227RMFS4"]
+                        tickers_to_check = ["GC=F", "BTC-USD", "NVDA", "SBER", "USDRUB", "CNYRUB", "SU26227RMFS4"]
             prices = {t: 0.0 for t in tickers_to_check}
 
             # Получаем курс доллара из ЦБ (для конвертации USD-активов)
@@ -236,17 +236,16 @@ with tab2:
             if usd_rub_price is None or usd_rub_price <= 0:
                 usd_rub_price = 90.0  # запасное значение
 
+            # Словарь для преобразования валютных тикеров в коды ЦБ
+            currency_map = {"USDRUB": "USD", "EURRUB": "EUR", "CNYRUB": "CNY"}
+
             for t in tickers_to_check:
                 # Проверяем, является ли тикер валютой
-                if t in CURRENCY_TICKERS or t.startswith(('USDRUB', 'EURRUB', 'CNYRUB')):
-                    if t == "USDRUB=X":
-                        curr_code = "USD"
-                    elif t == "EURRUB=X":
-                        curr_code = "EUR"
-                    elif t == "CNYRUB=X":
-                        curr_code = "CNY"
+                if t in CURRENCY_TICKERS or t in currency_map:
+                    if t in currency_map:
+                        curr_code = currency_map[t]
                     else:
-                        curr_code = t
+                        curr_code = t  # если это USD, EUR, CNY и т.д.
                     price_rub = get_cbr_currency(curr_code)
                     if price_rub is not None:
                         prices[t] = float(price_rub)
