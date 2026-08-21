@@ -600,72 +600,144 @@ with tab3:
     pred_meta = ASSETS_DB[asset_pred_name]
     pred_ticker = pred_meta["ticker"]
     pred_russian = pred_meta["market"] == "Мосбиржа" or "Yahoo" in pred_meta["market"]
+    is_currency = pred_meta["type"] == "Валюта"
+
+    # ================= ФУНКЦИЯ ДЛЯ ИСТОРИЧЕСКИХ КУРСОВ ВАЛЮТ =================
+    @st.cache_data(ttl=3600)
+    def get_currency_history(base_currency, target_currency='RUB', days=365):
+        """
+        Получает исторические курсы валюты через exchangerate.host.
+        base_currency: USD, EUR, CNY и т.д.
+        target_currency: RUB (по умолчанию)
+        days: количество дней назад
+        Возвращает DataFrame с колонками Date и Close (курс).
+        """
+        try:
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=days)
+            url = f"https://api.exchangerate.host/timeseries"
+            params = {
+                'start_date': start_date.strftime('%Y-%m-%d'),
+                'end_date': end_date.strftime('%Y-%m-%d'),
+                'base': base_currency,
+                'symbols': target_currency
+            }
+            response = requests.get(url, params=params)
+            data = response.json()
+            if 'rates' not in data:
+                return None
+            rates = data['rates']
+            df = pd.DataFrame.from_dict(rates, orient='index')
+            df.index = pd.to_datetime(df.index)
+            df = df.sort_index()
+            df = df.rename(columns={target_currency: 'Close'})
+            df['Date'] = df.index
+            df = df[['Date', 'Close']]
+            return df
+        except Exception as e:
+            st.error(f"Ошибка загрузки истории валют: {e}")
+            return None
 
     if st.button("Запустить ИИ-анализ (с сезонностью)"):
         with st.spinner("Модель Prophet рассчитывает сезонные тренды..."):
             pred_data = None
-            if pred_russian and pred_meta["type"] != "Валюта":
-                pred_data = get_moex_data(pred_ticker, 500)
+            
+            # ---- Если выбран актив "Валюта" ----
+            if is_currency:
+                # Определяем код базовой валюты (USD, EUR, CNY)
+                if "USDRUB" in pred_ticker:
+                    base = "USD"
+                elif "EURRUB" in pred_ticker:
+                    base = "EUR"
+                elif "CNYRUB" in pred_ticker:
+                    base = "CNY"
+                else:
+                    # Если вдруг другой тикер, пробуем взять первые 3 буквы
+                    base = pred_ticker[:3].upper()
+                pred_data = get_currency_history(base, 'RUB', days=365)
                 if pred_data is None or pred_data.empty:
-                    pred_data = yf.download(f"{pred_ticker}.ME", period="1y", progress=False)
-                    if not pred_data.empty and isinstance(pred_data.columns, pd.MultiIndex):
-                        pred_data.columns = pred_data.columns.droplevel(1)
-                        pred_data = pred_data.reset_index()
-            else:
-                if pred_meta["type"] == "Валюта":
-                    st.warning("Прогноз для валюты недоступен (нет исторических данных).")
+                    st.error("Не удалось загрузить историю валюты. Попробуйте другой актив.")
                     st.stop()
-                pred_data = yf.download(pred_ticker, period="1y", progress=False)
-                if not pred_data.empty:
-                    if isinstance(pred_data.columns, pd.MultiIndex):
-                        pred_data.columns = pred_data.columns.droplevel(1)
-                    pred_data = pred_data.reset_index()
+                st.caption(f"Исторические данные для {base}/RUB за последние 365 дней (источник: exchangerate.host)")
+
+            # ---- Для остальных активов (акции, облигации, крипта, металлы) ----
+            else:
+                if pred_russian and not is_currency:
+                    pred_data = get_moex_data(pred_ticker, 500)
+                    if pred_data is None or pred_data.empty:
+                        st.warning("⚠️ Официальный API Мосбиржи временно недоступен. Данные загружаются через Yahoo Finance.")
+                        ticker_yahoo = f"{pred_ticker}.ME" if not pred_ticker.endswith('.ME') else pred_ticker
+                        pred_data = yf.download(ticker_yahoo, period="1y", progress=False)
+                        if not pred_data.empty:
+                            if isinstance(pred_data.columns, pd.MultiIndex):
+                                pred_data.columns = pred_data.columns.droplevel(1)
+                            pred_data = pred_data.reset_index()
+                else:
+                    pred_data = yf.download(pred_ticker, period="1y", progress=False)
+                    if not pred_data.empty:
+                        if isinstance(pred_data.columns, pd.MultiIndex):
+                            pred_data.columns = pred_data.columns.droplevel(1)
+                        pred_data = pred_data.reset_index()
 
             if pred_data is None or pred_data.empty:
                 st.error("Недостаточно данных для построения прогноза.")
-            else:
-                df_prophet = pred_data[['Date', 'Close']].rename(columns={'Date': 'ds', 'Close': 'y'})
-                m = Prophet(daily_seasonality=False, yearly_seasonality=True)
+                st.stop()
+
+            # ---- Убедимся, что колонки называются 'Date' и 'Close' ----
+            if 'Date' not in pred_data.columns:
+                pred_data = pred_data.reset_index()
+                pred_data.rename(columns={'index': 'Date'}, inplace=True)
+            if 'Close' not in pred_data.columns:
+                st.error("В данных нет колонки 'Close'.")
+                st.stop()
+
+            # ---- Прогноз через Prophet ----
+            df_prophet = pred_data[['Date', 'Close']].rename(columns={'Date': 'ds', 'Close': 'y'})
+            m = Prophet(daily_seasonality=False, yearly_seasonality=True)
+            # Добавляем праздники только для не-валют
+            if not is_currency:
                 m.add_country_holidays(country_name='US' if not pred_russian else 'Russia')
-                m.fit(df_prophet)
-                future = m.make_future_dataframe(periods=60)
-                forecast = m.predict(future)
+            m.fit(df_prophet)
+            future = m.make_future_dataframe(periods=60)
+            forecast = m.predict(future)
 
-                fig_pred = go.Figure()
-                fig_pred.add_trace(go.Scatter(x=pred_data['Date'], y=pred_data['Close'], mode='lines', name='Реальная цена'))
-                fig_pred.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat'], mode='lines', name='Прогноз ИИ (Prophet)', line=dict(dash='dash', color='red')))
-                fig_pred.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_upper'], fill=None, mode='lines', line_color='rgba(255,0,0,0.05)', name='Верхняя граница', showlegend=False))
-                fig_pred.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_lower'], fill='tonexty', mode='lines', line_color='rgba(255,0,0,0.05)', name='Нижняя граница', showlegend=False))
-                fig_pred.update_layout(title=f"ИИ-прогноз (Сезонная модель Facebook Prophet) на 60 дней", xaxis_title="Дата")
-                st.plotly_chart(fig_pred, use_container_width=True)
+            # ---- Рисуем график ----
+            fig_pred = go.Figure()
+            fig_pred.add_trace(go.Scatter(x=pred_data['Date'], y=pred_data['Close'], mode='lines', name='Реальная цена'))
+            fig_pred.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat'], mode='lines', name='Прогноз ИИ (Prophet)', line=dict(dash='dash', color='red')))
+            fig_pred.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_upper'], fill=None, mode='lines', line_color='rgba(255,0,0,0.05)', name='Верхняя граница', showlegend=False))
+            fig_pred.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_lower'], fill='tonexty', mode='lines', line_color='rgba(255,0,0,0.05)', name='Нижняя граница', showlegend=False))
+            fig_pred.update_layout(title=f"ИИ-прогноз (Сезонная модель Facebook Prophet) на 60 дней", xaxis_title="Дата")
+            st.plotly_chart(fig_pred, use_container_width=True)
 
-                st.divider()
-                st.subheader("📉 Анализ исторических провалов и взлетов")
-                daily_returns = pred_data['Close'].pct_change()
-                
-                if len(daily_returns) > 0:
-                    worst_days = daily_returns.nsmallest(5).dropna()
-                    best_days = daily_returns.nlargest(5).dropna()
+            # ---- Анализ сильных изменений (только для акций, для валют тоже можно) ----
+            st.divider()
+            st.subheader("📉 Анализ исторических провалов и взлетов")
+            daily_returns = pred_data['Close'].pct_change()
+            
+            if len(daily_returns) > 0:
+                worst_days = daily_returns.nsmallest(5).dropna()
+                best_days = daily_returns.nlargest(5).dropna()
 
-                    st.markdown("**Дни самого сильного падения:**")
-                    if not worst_days.empty:
-                        for idx, pct in worst_days.items():
-                            real_date = pred_data.iloc[idx]['Date']
-                            date_formatted = real_date.strftime("%d.%m.%Y")
-                            st.write(f"📉 {date_formatted}: падение на **{pct:.2%}**. *Примечание: часто это связано с выходом плохой отчетности или макроэкономическими новостями.*")
-                    else:
-                        st.write("Нет значительных падений.")
-
-                    st.markdown("**Дни самого сильного роста:**")
-                    if not best_days.empty:
-                        for idx, pct in best_days.items():
-                            real_date = pred_data.iloc[idx]['Date']
-                            date_formatted = real_date.strftime("%d.%m.%Y")
-                            st.write(f"📈 {date_formatted}: рост на **{pct:.2%}**. *Примечание: обычно происходит на позитивных новостях или сильных квартальных отчетах.*")
-                    else:
-                        st.write("Нет значительных ростов.")
+                st.markdown("**Дни самого сильного падения:**")
+                if not worst_days.empty:
+                    for idx, pct in worst_days.items():
+                        real_date = pred_data.iloc[idx]['Date']
+                        date_formatted = real_date.strftime("%d.%m.%Y")
+                        st.write(f"📉 {date_formatted}: падение на **{pct:.2%}**. *Примечание: часто это связано с выходом плохой отчетности или макроэкономическими новостями.*")
                 else:
-                    st.write("Недостаточно данных для анализа.")
+                    st.write("Нет значительных падений.")
+
+                st.markdown("**Дни самого сильного роста:**")
+                if not best_days.empty:
+                    for idx, pct in best_days.items():
+                        real_date = pred_data.iloc[idx]['Date']
+                        date_formatted = real_date.strftime("%d.%m.%Y")
+                        st.write(f"📈 {date_formatted}: рост на **{pct:.2%}**. *Примечание: обычно происходит на позитивных новостях или сильных квартальных отчетах.*")
+                else:
+                    st.write("Нет значительных ростов.")
+            else:
+                st.write("Недостаточно данных для анализа.")
 
 # ================================
 # Вкладка 4: Чистая доходность и макро-риски
