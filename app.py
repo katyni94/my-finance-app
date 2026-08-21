@@ -129,72 +129,51 @@ def get_currency_history(base_currency, target_currency='RUB', days=365):
 @st.cache_data(ttl=3600)
 def fetch_bank_rates_from_aggregator():
     """
-    Парсит ставки по вкладам с сайта bankinform.ru.
+    Парсит ставки по вкладам с mainfin.ru.
     Возвращает словарь {название_банка: ставка (float)} или None в случае ошибки.
     """
     try:
-        url = "https://bankinform.ru/deposits/rate/"
+        url = "https://mainfin.ru/deposit"
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code != 200:
             return None
-        
+
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Находим таблицу со ставками (ищем таблицу с классом, содержащим 'table')
-        table = soup.find('table')
+        # Ищем таблицу с классом 'table' или 'rates-table'
+        table = soup.find('table', class_=lambda c: c and ('table' in c or 'rates' in c))
         if not table:
-            # Пробуем найти таблицу по другому признаку
-            table = soup.find('div', class_='table-responsive')
-            if table:
-                table = table.find('table')
+            # Ищем любую таблицу с нужными данными
+            tables = soup.find_all('table')
+            for t in tables:
+                if 'банк' in t.get_text().lower() or 'ставка' in t.get_text().lower():
+                    table = t
+                    break
         
         if not table:
             return None
         
-        # Парсим строки таблицы (пропускаем заголовок)
-        rows = table.find_all('tr')[1:]  # первая строка - заголовок
-        
+        rows = table.find_all('tr')
         rates = {}
-        for row in rows:
+        # Пропускаем заголовок (первая строка)
+        for row in rows[1:]:
             cols = row.find_all('td')
             if len(cols) >= 2:
-                # Название банка — часто в первом столбце
                 bank_name = cols[0].get_text(strip=True)
-                # Ставка — во втором столбце (может быть с %)
-                rate_str = cols[1].get_text(strip=True).replace('%', '').replace(',', '.')
+                rate_str = cols[1].get_text(strip=True).replace('%', '').replace(',', '.').strip()
                 try:
                     rate = float(rate_str)
-                    # Сопоставляем с нашими банками (приводим к общему виду)
-                    # Убираем лишние пробелы, приводим к нижнему регистру для сравнения
-                    # Сохраняем в словарь
-                    rates[bank_name] = rate
-                except ValueError:
+                    # Сохраняем, если ставка разумная (0-50%)
+                    if 0 < rate < 50:
+                        rates[bank_name] = rate
+                except:
                     continue
-        
-        # Если не удалось найти таблицу, пробуем другой селектор (запасной)
-        if not rates:
-            # Ищем по блоку с классом 'rates' или другим
-            rates_block = soup.find('div', class_='rates-list')
-            if rates_block:
-                items = rates_block.find_all('div', class_='rate-item')
-                for item in items:
-                    name_elem = item.find('div', class_='bank-name')
-                    rate_elem = item.find('div', class_='rate-value')
-                    if name_elem and rate_elem:
-                        bank_name = name_elem.get_text(strip=True)
-                        rate_str = rate_elem.get_text(strip=True).replace('%', '').replace(',', '.')
-                        try:
-                            rate = float(rate_str)
-                            rates[bank_name] = rate
-                        except:
-                            continue
-        
         return rates if rates else None
     except Exception as e:
-        st.warning(f"Ошибка парсинга ставок: {e}")
+        st.warning(f"Ошибка парсинга mainfin: {e}")
         return None
     # ---- Попытка 2: exchangerate.host ----
     try:
