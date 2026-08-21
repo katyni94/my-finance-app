@@ -8,46 +8,6 @@ import re
 from datetime import datetime, timedelta
 from prophet import Prophet
 import xml.etree.ElementTree as ET
-@st.cache_data(ttl=3600)
-def get_currency_history(base_currency, target_currency='RUB', days=365):
-    """
-    Получает исторические курсы валюты через Frankfurter API.
-    base_currency: USD, EUR, CNY и т.д.
-    target_currency: RUB (по умолчанию)
-    days: количество дней назад
-    Возвращает DataFrame с колонками Date и Close (курс).
-    """
-    try:
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
-        url = "https://api.frankfurter.app/timeseries"
-        params = {
-            'from': base_currency,
-            'to': target_currency,
-            'start_date': start_date.strftime('%Y-%m-%d'),
-            'end_date': end_date.strftime('%Y-%m-%d')
-        }
-        response = requests.get(url, params=params)
-        if response.status_code != 200:
-            st.error(f"Frankfurter API вернул ошибку {response.status_code}: {response.text}")
-            return None
-        data = response.json()
-        if 'rates' not in data:
-            st.error("Нет данных о курсах в ответе Frankfurter")
-            return None
-        rates = data['rates']
-        # Преобразуем в DataFrame
-        df = pd.DataFrame.from_dict(rates, orient='index')
-        df.index = pd.to_datetime(df.index)
-        df = df.sort_index()
-        # Переименовываем колонку target_currency в 'Close'
-        df = df.rename(columns={target_currency: 'Close'})
-        df['Date'] = df.index
-        df = df[['Date', 'Close']]
-        return df
-    except Exception as e:
-        st.error(f"Ошибка загрузки истории валют: {e}")
-        return None
 
 # ================= НАСТРОЙКИ СТРАНИЦЫ =================
 st.set_page_config(page_title="Финансовый ассистент", layout="wide")
@@ -131,6 +91,92 @@ def get_live_price(ticker):
     except:
         return 0.0
 
+# ================= ФУНКЦИЯ ДЛЯ ИСТОРИЧЕСКИХ КУРСОВ ВАЛЮТ (С ДИАГНОСТИКОЙ) =================
+@st.cache_data(ttl=3600)
+def get_currency_history(base_currency, target_currency='RUB', days=365):
+    """
+    Загружает исторические курсы валюты.
+    Пробует: 1) Frankfurter, 2) exchangerate.host, 3) Yahoo Finance.
+    Возвращает DataFrame с колонками Date и Close.
+    """
+    # ---- Попытка 1: Frankfurter ----
+    try:
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        url = "https://api.frankfurter.app/timeseries"
+        params = {
+            'from': base_currency,
+            'to': target_currency,
+            'start_date': start_date.strftime('%Y-%m-%d'),
+            'end_date': end_date.strftime('%Y-%m-%d')
+        }
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if 'rates' in data and data['rates']:
+                rates = data['rates']
+                df = pd.DataFrame.from_dict(rates, orient='index')
+                df.index = pd.to_datetime(df.index)
+                df = df.sort_index()
+                df = df.rename(columns={target_currency: 'Close'})
+                df['Date'] = df.index
+                df = df[['Date', 'Close']]
+                return df
+    except Exception as e:
+        st.warning(f"Frankfurter не сработал: {e}")
+        pass
+
+    # ---- Попытка 2: exchangerate.host ----
+    try:
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        url = "https://api.exchangerate.host/timeseries"
+        params = {
+            'start_date': start_date.strftime('%Y-%m-%d'),
+            'end_date': end_date.strftime('%Y-%m-%d'),
+            'base': base_currency,
+            'symbols': target_currency
+        }
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if 'rates' in data and data['rates']:
+                rates = data['rates']
+                df = pd.DataFrame.from_dict(rates, orient='index')
+                df.index = pd.to_datetime(df.index)
+                df = df.sort_index()
+                df = df.rename(columns={target_currency: 'Close'})
+                df['Date'] = df.index
+                df = df[['Date', 'Close']]
+                return df
+    except Exception as e:
+        st.warning(f"exchangerate.host не сработал: {e}")
+        pass
+
+    # ---- Попытка 3: Yahoo Finance (для валютных пар) ----
+    try:
+        # Формируем тикер: например USDRUB=X
+        ticker = f"{base_currency}{target_currency}=X"
+        df = yf.download(ticker, period=f"{days}d", progress=False, auto_adjust=False)
+        if df.empty:
+            # Пробуем без =X
+            ticker = f"{base_currency}{target_currency}"
+            df = yf.download(ticker, period=f"{days}d", progress=False, auto_adjust=False)
+        if not df.empty:
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.droplevel(1)
+            df = df[['Close']]
+            df = df.reset_index()
+            df.columns = ['Date', 'Close']
+            return df
+    except Exception as e:
+        st.warning(f"Yahoo Finance не сработал: {e}")
+        pass
+
+    # Если ничего не сработало
+    st.error(f"Не удалось загрузить историю для {base_currency}/{target_currency} ни через один из источников.")
+    return None
+
 # ================= ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ АКТУАЛЬНЫХ ОФЗ =================
 @st.cache_data(ttl=3600)
 def get_active_ofz(limit=5):
@@ -139,33 +185,22 @@ def get_active_ofz(limit=5):
     Возвращает список словарей: {'ticker': 'SU...', 'name': 'ОФЗ ...'}
     """
     try:
-        # Запрос к Мосбирже для получения списка облигаций с фильтром по типу 'ОФЗ'
         url = 'https://iss.moex.com/iss/engines/stock/markets/bonds/securities.json'
         params = {
             'iss.only': 'securities',
             'securities.columns': 'SECID,SHORTNAME,REGNUMBER,ISIN,STATUS,LOTVALUE,COUPONPERCENT,COUPONFREQUENCY,MATDATE',
-            'q.type': '2'  # фильтр по типу: государственные
+            'q.type': '2'
         }
         r = requests.get(url, params=params).json()
         data = r['securities']['data']
         cols = r['securities']['columns']
         df_bonds = pd.DataFrame(data, columns=cols)
-        
-        # Фильтруем только ОФЗ (по короткому имени или по ISIN)
         ofz_mask = df_bonds['SHORTNAME'].str.startswith('ОФЗ') | df_bonds['SHORTNAME'].str.contains('ОФЗ')
         df_ofz = df_bonds[ofz_mask].copy()
-        
-        # Исключаем погашенные (STATUS != 'A' – активные)
         df_ofz = df_ofz[df_ofz['STATUS'] == 'A']
-        
-        # Убираем бумаги с истекшим сроком (MATDATE < сегодня)
         df_ofz['MATDATE'] = pd.to_datetime(df_ofz['MATDATE'])
         df_ofz = df_ofz[df_ofz['MATDATE'] > datetime.now()]
-        
-        # Сортируем по ликвидности (LOTVALUE – объём лота) или просто берём первые
         df_ofz = df_ofz.sort_values('LOTVALUE', ascending=False).head(limit)
-        
-        # Формируем список
         result = []
         for _, row in df_ofz.iterrows():
             ticker = row['SECID']
@@ -174,152 +209,58 @@ def get_active_ofz(limit=5):
         return result
     except Exception as e:
         st.error(f"Не удалось загрузить список ОФЗ: {e}")
-        # Возвращаем запасной вариант, если API не работает
         return [{'ticker': 'SU26238RMFS4', 'name': 'ОФЗ 26238'}]
 
 # ================= ДИНАМИЧЕСКАЯ БАЗА АКТИВОВ =================
 @st.cache_data(ttl=3600)
 def build_assets_db():
-    """
-    Формирует базу активов:
-    - Акции РФ (SBER, LKOH, GAZP, YNDX) – проверяем доступность через MOEX, иначе через Yahoo
-    - Акции США (AAPL, NVDA, TSLA) – через Yahoo
-    - Индексы, криптовалюты, металлы, валюты – статические
-    - ОФЗ – динамически получаем актуальные
-    """
     assets = {}
-    
-    # ---- Акции РФ (с проверкой доступности) ----
-    russian_tickers = {
-        "Сбербанк": "SBER",
-        "Лукойл": "LKOH",
-        "Газпром": "GAZP",
-        "Яндекс": "YNDX"
-    }
+    russian_tickers = {"Сбербанк": "SBER", "Лукойл": "LKOH", "Газпром": "GAZP", "Яндекс": "YNDX"}
     for name, ticker in russian_tickers.items():
-        # Проверяем, доступен ли тикер на Мосбирже
         test_data = get_moex_data(ticker, period_days=1)
         if test_data is not None and not test_data.empty:
             assets[f"{name} ({ticker})"] = {
-                "ticker": ticker,
-                "type": "Акция РФ",
+                "ticker": ticker, "type": "Акция РФ",
                 "risk": "Низкий" if name in ["Сбербанк", "Газпром"] else "Средний",
-                "market": "Мосбиржа",
-                "currency": "RUB"
+                "market": "Мосбиржа", "currency": "RUB"
             }
         else:
-            # Резерв через Yahoo (добавляем .ME)
             yahoo_ticker = f"{ticker}.ME"
-            # Проверим, есть ли данные через Yahoo
             try:
                 df = yf.download(yahoo_ticker, period="1d", progress=False)
                 if not df.empty:
                     assets[f"{name} ({ticker})"] = {
-                        "ticker": yahoo_ticker,
-                        "type": "Акция РФ",
+                        "ticker": yahoo_ticker, "type": "Акция РФ",
                         "risk": "Низкий" if name in ["Сбербанк", "Газпром"] else "Средний",
-                        "market": "Мосбиржа (Yahoo)",
-                        "currency": "RUB"
+                        "market": "Мосбиржа (Yahoo)", "currency": "RUB"
                     }
             except:
                 pass
-    
-    # ---- Акции США ----
     us_stocks = {
         "Apple Inc. (AAPL)": {"ticker": "AAPL", "risk": "Средний"},
         "NVIDIA (NVDA)": {"ticker": "NVDA", "risk": "Высокий"},
         "Tesla Inc. (TSLA)": {"ticker": "TSLA", "risk": "Высокий"},
     }
     for name, info in us_stocks.items():
-        assets[name] = {
-            "ticker": info["ticker"],
-            "type": "Акция США",
-            "risk": info["risk"],
-            "market": "NASDAQ",
-            "currency": "USD"
-        }
-    
-    # ---- Индексы ----
-    assets["S&P 500 (Индекс)"] = {
-        "ticker": "^GSPC",
-        "type": "Индекс США",
-        "risk": "Средний",
-        "market": "США",
-        "currency": "USD"
-    }
-    
-    # ---- ОФЗ (динамические) ----
+        assets[name] = {"ticker": info["ticker"], "type": "Акция США", "risk": info["risk"], "market": "NASDAQ", "currency": "USD"}
+    assets["S&P 500 (Индекс)"] = {"ticker": "^GSPC", "type": "Индекс США", "risk": "Средний", "market": "США", "currency": "USD"}
     ofz_list = get_active_ofz(limit=5)
     for ofz in ofz_list:
         name = ofz['name'] if ofz['name'] else f"ОФЗ {ofz['ticker']}"
-        assets[name] = {
-            "ticker": ofz['ticker'],
-            "type": "Облигация",
-            "risk": "Низкий",
-            "market": "Мосбиржа",
-            "currency": "RUB"
-        }
-    
-    # ---- Криптовалюты ----
-    assets["Биткоин (BTC-USD)"] = {
-        "ticker": "BTC-USD",
-        "type": "Криптовалюта",
-        "risk": "Очень высокий",
-        "market": "Крипто",
-        "currency": "USD"
-    }
-    assets["Эфириум (ETH-USD)"] = {
-        "ticker": "ETH-USD",
-        "type": "Криптовалюта",
-        "risk": "Очень высокий",
-        "market": "Крипто",
-        "currency": "USD"
-    }
-    
-    # ---- Валюты (для отображения в графике) ----
-    assets["Доллар США (USDRUB)"] = {
-        "ticker": "USDRUB",  # будем использовать get_cbr_currency
-        "type": "Валюта",
-        "risk": "Средний",
-        "market": "Валютный",
-        "currency": "RUB"
-    }
-    assets["Евро (EURRUB)"] = {
-        "ticker": "EURRUB",
-        "type": "Валюта",
-        "risk": "Средний",
-        "market": "Валютный",
-        "currency": "RUB"
-    }
-    assets["Китайский юань (CNYRUB)"] = {
-        "ticker": "CNYRUB",
-        "type": "Валюта",
-        "risk": "Средний",
-        "market": "Валютный",
-        "currency": "RUB"
-    }
-    
-    # ---- Металлы ----
-    metals = {
-        "Золото (GC=F)": {"ticker": "GC=F", "risk": "Низкий"},
-        "Серебро (SI=F)": {"ticker": "SI=F", "risk": "Средний"},
-        "Платина (PL=F)": {"ticker": "PL=F", "risk": "Средний"}
-    }
+        assets[name] = {"ticker": ofz['ticker'], "type": "Облигация", "risk": "Низкий", "market": "Мосбиржа", "currency": "RUB"}
+    assets["Биткоин (BTC-USD)"] = {"ticker": "BTC-USD", "type": "Криптовалюта", "risk": "Очень высокий", "market": "Крипто", "currency": "USD"}
+    assets["Эфириум (ETH-USD)"] = {"ticker": "ETH-USD", "type": "Криптовалюта", "risk": "Очень высокий", "market": "Крипто", "currency": "USD"}
+    assets["Доллар США (USDRUB)"] = {"ticker": "USDRUB", "type": "Валюта", "risk": "Средний", "market": "Валютный", "currency": "RUB"}
+    assets["Евро (EURRUB)"] = {"ticker": "EURRUB", "type": "Валюта", "risk": "Средний", "market": "Валютный", "currency": "RUB"}
+    assets["Китайский юань (CNYRUB)"] = {"ticker": "CNYRUB", "type": "Валюта", "risk": "Средний", "market": "Валютный", "currency": "RUB"}
+    metals = {"Золото (GC=F)": {"ticker": "GC=F", "risk": "Низкий"}, "Серебро (SI=F)": {"ticker": "SI=F", "risk": "Средний"}, "Платина (PL=F)": {"ticker": "PL=F", "risk": "Средний"}}
     for name, info in metals.items():
-        assets[name] = {
-            "ticker": info["ticker"],
-            "type": "Металл",
-            "risk": info["risk"],
-            "market": "Сырье",
-            "currency": "USD"
-        }
-    
+        assets[name] = {"ticker": info["ticker"], "type": "Металл", "risk": info["risk"], "market": "Сырье", "currency": "USD"}
     return assets
 
-# Строим базу активов при загрузке (кэшируется)
 ASSETS_DB = build_assets_db()
 
-# ================= БАЗА БАНКОВСКИХ СТАВОК (статическая, для примера) =================
+# ================= БАЗА БАНКОВСКИХ СТАВОК =================
 BANK_RATES = [
     {"name": "Сбербанк", "rate": 18.50, "min_sum": 100000, "term_months": 6, "note": "Накопительный счет"},
     {"name": "Т-Банк (Тинькофф)", "rate": 19.20, "min_sum": 50000, "term_months": 6, "note": "С пополнением"},
@@ -349,16 +290,11 @@ with tab1:
 
     with st.spinner(f"Загружаем данные для {asset_name}..."):
         data = None
-        # Если это валюта — используем get_cbr_currency
         if meta["type"] == "Валюта":
             currency_code = ticker.replace("USDRUB", "USD").replace("EURRUB", "EUR").replace("CNYRUB", "CNY")
             rate = get_cbr_currency(currency_code)
             if rate is not None:
-                # Создаём DataFrame с одной точкой
-                data = pd.DataFrame({
-                    'Date': [datetime.now()],
-                    'Open': [rate], 'High': [rate], 'Low': [rate], 'Close': [rate], 'Volume': [0]
-                })
+                data = pd.DataFrame({'Date': [datetime.now()], 'Open': [rate], 'High': [rate], 'Low': [rate], 'Close': [rate], 'Volume': [0]})
             else:
                 st.error("Не удалось загрузить курс валюты.")
                 st.stop()
@@ -393,7 +329,6 @@ with tab1:
         c2.metric("Максимум", f"{currency}{data['High'].max():.2f}")
         c3.metric("Минимум", f"{currency}{data['Low'].min():.2f}")
 
-        # Рисуем свечной график, если данных больше одной точки
         if len(data) > 1:
             fig = go.Figure(data=[go.Candlestick(
                 x=data['Date'], open=data['Open'], high=data['High'],
@@ -406,7 +341,7 @@ with tab1:
             st.info("Для валют отображается только текущий курс, история недоступна.")
 
 # ================================
-# Функция генерации плана действий (без изменений)
+# Функция генерации плана действий
 # ================================
 def generate_action_plan(asset_name, price, risk_profile, alloc_rub):
     price = float(price)
@@ -436,7 +371,7 @@ def generate_action_plan(asset_name, price, risk_profile, alloc_rub):
             return "📈 **Актив роста.** Стоп-лосс: -10%. При росте на 15% - зафиксируйте часть прибыли."
 
 # ================================
-# Вкладка 2: Портфель (с автоматическим подбором)
+# Вкладка 2: Портфель
 # ================================
 if 'portfolio_data' not in st.session_state:
     st.session_state.portfolio_data = None
@@ -451,28 +386,21 @@ with tab2:
     if st.button("Собрать портфель и получить план"):
         with st.spinner("Загружаем цены и просчитываем стратегию..."):
             MIN_POSITION_RUB = 3000
-            # Определяем список тикеров для проверки
             tickers_to_check = []
-            # Добавляем тикеры из ASSETS_DB, которые не являются валютами (их мы будем обрабатывать отдельно)
             for key, val in ASSETS_DB.items():
                 if val["type"] == "Валюта":
                     continue
                 tickers_to_check.append(val["ticker"])
-            # Убираем дубликаты
             tickers_to_check = list(set(tickers_to_check))
             
             prices = {t: 0.0 for t in tickers_to_check}
-
-            # Получаем курс доллара из ЦБ (для конвертации USD-активов)
             usd_rub_price = get_cbr_currency("USD")
             if usd_rub_price is None or usd_rub_price <= 0:
                 usd_rub_price = 90.0
 
-            # Словарь для преобразования валютных тикеров в коды ЦБ
             currency_map = {"USDRUB": "USD", "EURRUB": "EUR", "CNYRUB": "CNY"}
 
             for t in tickers_to_check:
-                # Проверяем, является ли тикер валютой (если он в currency_map)
                 if t in currency_map:
                     curr_code = currency_map[t]
                     price_rub = get_cbr_currency(curr_code)
@@ -481,29 +409,19 @@ with tab2:
                     else:
                         prices[t] = 0.0
                 elif t in CURRENCY_TICKERS:
-                    # Если это просто USD, EUR и т.д. (не используется)
                     price_rub = get_cbr_currency(t)
                     if price_rub is not None:
                         prices[t] = float(price_rub)
                     else:
                         prices[t] = 0.0
                 else:
-                    # Пытаемся загрузить через MOEX или Yahoo
-                    # Сначала пробуем MOEX (для российских акций и облигаций)
                     df = get_moex_data(t, period_days=2)
                     if df is not None and not df.empty:
                         val = df['Close'].iloc[-1]
                         prices[t] = float(val) if not pd.isna(val) else 0.0
                     else:
-                        # Если не получилось, используем Yahoo
                         prices[t] = get_live_price(t)
 
-            # Формируем структуру аллокации на основе доступных активов
-            # Выбираем активы в зависимости от профиля риска
-            # Для простоты используем фиксированный набор, но с динамическими тикерами
-            # Мы будем брать из ASSETS_DB те, которые есть в списке tickers_to_check и у которых цена > 0
-            
-            # Сортируем активы по типу (защитные, доходные, рискованные)
             conservative_assets = []
             balanced_assets = []
             aggressive_assets = []
@@ -522,15 +440,13 @@ with tab2:
                 else:
                     balanced_assets.append(name)
             
-            # Выбираем активы в зависимости от профиля
             if risk_profile == "Консервативный (Низкий риск)":
                 selected_assets = conservative_assets[:3] + balanced_assets[:2]
             elif risk_profile == "Сбалансированный (Средний риск)":
                 selected_assets = conservative_assets[:2] + balanced_assets[:3] + aggressive_assets[:1]
-            else:  # Агрессивный
+            else:
                 selected_assets = balanced_assets[:2] + aggressive_assets[:3] + conservative_assets[:1]
             
-            # Если активов мало, добавляем из других категорий
             if len(selected_assets) < 3:
                 all_assets = list(ASSETS_DB.keys())
                 for name in all_assets:
@@ -541,17 +457,14 @@ with tab2:
                         if len(selected_assets) >= 5:
                             break
             
-            # Распределяем бюджет равномерно между выбранными активами
             num_assets = len(selected_assets)
             if num_assets == 0:
                 st.warning("Не удалось найти доступные активы для портфеля.")
                 st.stop()
             
-            # Создаём словарь долей (равномерно)
             equal_share = 1.0 / num_assets
             asset_alloc = {name: equal_share for name in selected_assets}
             
-            # Далее формируем таблицу и план действий (как в старом коде)
             table_data = []
             total_spent_rub = 0
             
@@ -632,7 +545,7 @@ with tab2:
             st.session_state.portfolio_risk = risk_profile
 
 # ================================
-# Вкладка 3: Умный ИИ и прогноз (без изменений)
+# Вкладка 3: ИИ-прогноз (с поддержкой валют и диагностикой)
 # ================================
 with tab3:
     st.subheader("🤖 Прогноз сезонности и анализ прошлых аномалий")
@@ -642,49 +555,12 @@ with tab3:
     pred_russian = pred_meta["market"] == "Мосбиржа" or "Yahoo" in pred_meta["market"]
     is_currency = pred_meta["type"] == "Валюта"
 
-    # ================= ФУНКЦИЯ ДЛЯ ИСТОРИЧЕСКИХ КУРСОВ ВАЛЮТ =================
-    @st.cache_data(ttl=3600)
-    def get_currency_history(base_currency, target_currency='RUB', days=365):
-        """
-        Получает исторические курсы валюты через exchangerate.host.
-        base_currency: USD, EUR, CNY и т.д.
-        target_currency: RUB (по умолчанию)
-        days: количество дней назад
-        Возвращает DataFrame с колонками Date и Close (курс).
-        """
-        try:
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
-            url = f"https://api.exchangerate.host/timeseries"
-            params = {
-                'start_date': start_date.strftime('%Y-%m-%d'),
-                'end_date': end_date.strftime('%Y-%m-%d'),
-                'base': base_currency,
-                'symbols': target_currency
-            }
-            response = requests.get(url, params=params)
-            data = response.json()
-            if 'rates' not in data:
-                return None
-            rates = data['rates']
-            df = pd.DataFrame.from_dict(rates, orient='index')
-            df.index = pd.to_datetime(df.index)
-            df = df.sort_index()
-            df = df.rename(columns={target_currency: 'Close'})
-            df['Date'] = df.index
-            df = df[['Date', 'Close']]
-            return df
-        except Exception as e:
-            st.error(f"Ошибка загрузки истории валют: {e}")
-            return None
-
     if st.button("Запустить ИИ-анализ (с сезонностью)"):
         with st.spinner("Модель Prophet рассчитывает сезонные тренды..."):
             pred_data = None
             
-            # ---- Если выбран актив "Валюта" ----
             if is_currency:
-                # Определяем код базовой валюты (USD, EUR, CNY)
+                # Определяем код базовой валюты
                 if "USDRUB" in pred_ticker:
                     base = "USD"
                 elif "EURRUB" in pred_ticker:
@@ -692,16 +568,16 @@ with tab3:
                 elif "CNYRUB" in pred_ticker:
                     base = "CNY"
                 else:
-                    # Если вдруг другой тикер, пробуем взять первые 3 буквы
                     base = pred_ticker[:3].upper()
+                # Пробуем загрузить историю, функция сама выдаст ошибку, если не получится
                 pred_data = get_currency_history(base, 'RUB', days=365)
-                if pred_data is None or pred_data.empty:
-                    st.error("Не удалось загрузить историю валюты. Попробуйте другой актив.")
+                if pred_data is None:
+                    # st.error уже выведена внутри get_currency_history
                     st.stop()
-                st.caption(f"Исторические данные для {base}/RUB за последние 365 дней (источник: exchangerate.host)")
+                st.caption(f"Исторические данные для {base}/RUB за последние 365 дней (источник: несколько API)")
 
-            # ---- Для остальных активов (акции, облигации, крипта, металлы) ----
             else:
+                # Для остальных активов (акции, облигации, крипта, металлы)
                 if pred_russian and not is_currency:
                     pred_data = get_moex_data(pred_ticker, 500)
                     if pred_data is None or pred_data.empty:
@@ -723,7 +599,7 @@ with tab3:
                 st.error("Недостаточно данных для построения прогноза.")
                 st.stop()
 
-            # ---- Убедимся, что колонки называются 'Date' и 'Close' ----
+            # Убедимся, что колонки называются 'Date' и 'Close'
             if 'Date' not in pred_data.columns:
                 pred_data = pred_data.reset_index()
                 pred_data.rename(columns={'index': 'Date'}, inplace=True)
@@ -731,17 +607,16 @@ with tab3:
                 st.error("В данных нет колонки 'Close'.")
                 st.stop()
 
-            # ---- Прогноз через Prophet ----
+            # Прогноз через Prophet
             df_prophet = pred_data[['Date', 'Close']].rename(columns={'Date': 'ds', 'Close': 'y'})
             m = Prophet(daily_seasonality=False, yearly_seasonality=True)
-            # Добавляем праздники только для не-валют
             if not is_currency:
                 m.add_country_holidays(country_name='US' if not pred_russian else 'Russia')
             m.fit(df_prophet)
             future = m.make_future_dataframe(periods=60)
             forecast = m.predict(future)
 
-            # ---- Рисуем график ----
+            # График
             fig_pred = go.Figure()
             fig_pred.add_trace(go.Scatter(x=pred_data['Date'], y=pred_data['Close'], mode='lines', name='Реальная цена'))
             fig_pred.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat'], mode='lines', name='Прогноз ИИ (Prophet)', line=dict(dash='dash', color='red')))
@@ -750,7 +625,7 @@ with tab3:
             fig_pred.update_layout(title=f"ИИ-прогноз (Сезонная модель Facebook Prophet) на 60 дней", xaxis_title="Дата")
             st.plotly_chart(fig_pred, use_container_width=True)
 
-            # ---- Анализ сильных изменений (только для акций, для валют тоже можно) ----
+            # Анализ сильных изменений
             st.divider()
             st.subheader("📉 Анализ исторических провалов и взлетов")
             daily_returns = pred_data['Close'].pct_change()
@@ -780,7 +655,7 @@ with tab3:
                 st.write("Недостаточно данных для анализа.")
 
 # ================================
-# Вкладка 4: Чистая доходность и макро-риски
+# Вкладка 4: Доходность
 # ================================
 with tab4:
     st.subheader("📊 Чистая доходность и макроэкономические риски")
@@ -875,7 +750,7 @@ with tab4:
     """)
 
 # ================================
-# Вкладка 5: Сравнение банковских ставок
+# Вкладка 5: Вклады банков
 # ================================
 with tab5:
     st.subheader("🏦 Лучшие предложения по вкладам в РФ")
