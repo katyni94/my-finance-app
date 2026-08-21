@@ -7,10 +7,53 @@ import requests
 import re
 from datetime import datetime, timedelta
 from prophet import Prophet
+import requests
+import xml.etree.ElementTree as ET
+
+@st.cache_data(ttl=3600)
+def get_cbr_currency(currency_code):
+    """
+    Получает курс валюты от ЦБ РФ по коду (USD, EUR, CNY)
+    """
+    url = "http://www.cbr.ru/scripts/XML_daily.asp"
+    try:
+        response = requests.get(url)
+        response.encoding = 'windows-1251'
+        root = ET.fromstring(response.text)
+        for valute in root.findall('Valute'):
+            char_code = valute.find('CharCode').text
+            if char_code == currency_code:
+                value = valute.find('Value').text.replace(',', '.')
+                return float(value)
+        return None
+    except Exception as e:
+        st.error(f"Ошибка загрузки курса ЦБ: {e}")
+        return None
 
 st.set_page_config(page_title="Финансовый ассистент", layout="wide")
 
 st.title("📊 Смарт-Ассистент для РФ")
+# --- Блок курсов валют (ЦБ РФ) ---
+st.sidebar.header("💱 Курсы валют (ЦБ РФ)")
+
+usd = get_cbr_currency("USD")
+eur = get_cbr_currency("EUR")
+cny = get_cbr_currency("CNY")
+
+if usd:
+    st.sidebar.metric("🇺🇸 Доллар США", f"{usd:.4f} ₽")
+else:
+    st.sidebar.warning("Не удалось загрузить курс USD")
+
+if eur:
+    st.sidebar.metric("🇪🇺 Евро", f"{eur:.4f} ₽")
+else:
+    st.sidebar.warning("Не удалось загрузить курс EUR")
+
+if cny:
+    st.sidebar.metric("🇨🇳 Китайский юань", f"{cny:.4f} ₽")
+else:
+    st.sidebar.warning("Не удалось загрузить курс CNY")
 st.markdown("Анализ акций РФ/США, облигаций, криптовалют, металлов и валют. Портфель и прогноз с учетом сезонности.")
 
 # ================= ФУНКЦИЯ ДЛЯ РОССИЙСКИХ АКЦИЙ (MOEX) =================
