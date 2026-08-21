@@ -229,40 +229,36 @@ with tab2:
         with st.spinner("Загружаем цены и просчитываем стратегию..."):
             MIN_POSITION_RUB = 3000 
             tickers_to_check = ["GC=F", "BTC-USD", "NVDA", "SBER", "USDRUB=X", "CNYRUB=X", "SU26227RMFS4"]
-prices = {t: 0.0 for t in tickers_to_check}
+            prices = {t: 0.0 for t in tickers_to_check}
 
-# Получаем курс доллара (для конвертации USD-активов) из ЦБ
-usd_rub_price = get_cbr_currency("USD")
-if usd_rub_price is None or usd_rub_price <= 0:
-    usd_rub_price = 90.0  # запасное значение
+            # Получаем курс доллара из ЦБ (для конвертации USD-активов)
+            usd_rub_price = get_cbr_currency("USD")
+            if usd_rub_price is None or usd_rub_price <= 0:
+                usd_rub_price = 90.0  # запасное значение
 
-for t in tickers_to_check:
-    # Проверяем, является ли тикер валютой
-    if t in CURRENCY_TICKERS or t.startswith(('USDRUB', 'EURRUB', 'CNYRUB')):
-        # Для валютных пар определяем код валюты (USD, EUR, CNY)
-        if t == "USDRUB=X":
-            curr_code = "USD"
-        elif t == "EURRUB=X":
-            curr_code = "EUR"
-        elif t == "CNYRUB=X":
-            curr_code = "CNY"
-        else:
-            curr_code = t  # если прямо USD, EUR и т.д.
-        
-        price_rub = get_cbr_currency(curr_code)
-        if price_rub is not None:
-            prices[t] = float(price_rub)
-        else:
-            prices[t] = 0.0
-    elif t == "SBER" or t == "SU26227RMFS4":
-        # Для российских акций и ОФЗ используем MOEX
-        df = get_moex_data(t, 2)
-        if df is not None and not df.empty:
-            val = df['Close'].iloc[-1]
-            prices[t] = float(val) if not pd.isna(val) else 0.0
-    else:
-        # Для всех остальных (золото, крипта, акции США) используем yfinance
-        prices[t] = get_live_price(t)
+            for t in tickers_to_check:
+                # Проверяем, является ли тикер валютой
+                if t in CURRENCY_TICKERS or t.startswith(('USDRUB', 'EURRUB', 'CNYRUB')):
+                    if t == "USDRUB=X":
+                        curr_code = "USD"
+                    elif t == "EURRUB=X":
+                        curr_code = "EUR"
+                    elif t == "CNYRUB=X":
+                        curr_code = "CNY"
+                    else:
+                        curr_code = t
+                    price_rub = get_cbr_currency(curr_code)
+                    if price_rub is not None:
+                        prices[t] = float(price_rub)
+                    else:
+                        prices[t] = 0.0
+                elif t == "SBER" or t == "SU26227RMFS4":
+                    df = get_moex_data(t, 2)
+                    if df is not None and not df.empty:
+                        val = df['Close'].iloc[-1]
+                        prices[t] = float(val) if not pd.isna(val) else 0.0
+                else:
+                    prices[t] = get_live_price(t)
 
             asset_alloc_base = {
                 "Консервативный (Низкий риск)": {"Золото (GC=F)": 0.25, "ОФЗ (SU26227RMFS4)": 0.25, "Доллар США (USDRUB)": 0.20, "Китайский юань (CNYRUB)": 0.15, "Сбербанк (SBER)": 0.10, "Биткоин (BTC-USD)": 0.05},
