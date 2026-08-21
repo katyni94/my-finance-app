@@ -6,3 +6,4 @@ plotly
 requests
 prophet
 requests
+beautifulsoup4
