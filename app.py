@@ -8,6 +8,46 @@ import re
 from datetime import datetime, timedelta
 from prophet import Prophet
 import xml.etree.ElementTree as ET
+@st.cache_data(ttl=3600)
+def get_currency_history(base_currency, target_currency='RUB', days=365):
+    """
+    Получает исторические курсы валюты через Frankfurter API.
+    base_currency: USD, EUR, CNY и т.д.
+    target_currency: RUB (по умолчанию)
+    days: количество дней назад
+    Возвращает DataFrame с колонками Date и Close (курс).
+    """
+    try:
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        url = "https://api.frankfurter.app/timeseries"
+        params = {
+            'from': base_currency,
+            'to': target_currency,
+            'start_date': start_date.strftime('%Y-%m-%d'),
+            'end_date': end_date.strftime('%Y-%m-%d')
+        }
+        response = requests.get(url, params=params)
+        if response.status_code != 200:
+            st.error(f"Frankfurter API вернул ошибку {response.status_code}: {response.text}")
+            return None
+        data = response.json()
+        if 'rates' not in data:
+            st.error("Нет данных о курсах в ответе Frankfurter")
+            return None
+        rates = data['rates']
+        # Преобразуем в DataFrame
+        df = pd.DataFrame.from_dict(rates, orient='index')
+        df.index = pd.to_datetime(df.index)
+        df = df.sort_index()
+        # Переименовываем колонку target_currency в 'Close'
+        df = df.rename(columns={target_currency: 'Close'})
+        df['Date'] = df.index
+        df = df[['Date', 'Close']]
+        return df
+    except Exception as e:
+        st.error(f"Ошибка загрузки истории валют: {e}")
+        return None
 
 # ================= НАСТРОЙКИ СТРАНИЦЫ =================
 st.set_page_config(page_title="Финансовый ассистент", layout="wide")
