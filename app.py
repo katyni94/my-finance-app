@@ -8,6 +8,7 @@ import re
 from datetime import datetime, timedelta
 from prophet import Prophet
 import xml.etree.ElementTree as ET
+from bs4 import BeautifulSoup
 
 # ================= НАСТРОЙКИ СТРАНИЦЫ =================
 st.set_page_config(page_title="Финансовый ассистент", layout="wide")
@@ -125,7 +126,76 @@ def get_currency_history(base_currency, target_currency='RUB', days=365):
     except Exception as e:
         st.warning(f"Frankfurter не сработал: {e}")
         pass
-
+@st.cache_data(ttl=3600)
+def fetch_bank_rates_from_aggregator():
+    """
+    Парсит ставки по вкладам с сайта bankinform.ru.
+    Возвращает словарь {название_банка: ставка (float)} или None в случае ошибки.
+    """
+    try:
+        url = "https://bankinform.ru/deposits/rate/"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            return None
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Находим таблицу со ставками (ищем таблицу с классом, содержащим 'table')
+        table = soup.find('table')
+        if not table:
+            # Пробуем найти таблицу по другому признаку
+            table = soup.find('div', class_='table-responsive')
+            if table:
+                table = table.find('table')
+        
+        if not table:
+            return None
+        
+        # Парсим строки таблицы (пропускаем заголовок)
+        rows = table.find_all('tr')[1:]  # первая строка - заголовок
+        
+        rates = {}
+        for row in rows:
+            cols = row.find_all('td')
+            if len(cols) >= 2:
+                # Название банка — часто в первом столбце
+                bank_name = cols[0].get_text(strip=True)
+                # Ставка — во втором столбце (может быть с %)
+                rate_str = cols[1].get_text(strip=True).replace('%', '').replace(',', '.')
+                try:
+                    rate = float(rate_str)
+                    # Сопоставляем с нашими банками (приводим к общему виду)
+                    # Убираем лишние пробелы, приводим к нижнему регистру для сравнения
+                    # Сохраняем в словарь
+                    rates[bank_name] = rate
+                except ValueError:
+                    continue
+        
+        # Если не удалось найти таблицу, пробуем другой селектор (запасной)
+        if not rates:
+            # Ищем по блоку с классом 'rates' или другим
+            rates_block = soup.find('div', class_='rates-list')
+            if rates_block:
+                items = rates_block.find_all('div', class_='rate-item')
+                for item in items:
+                    name_elem = item.find('div', class_='bank-name')
+                    rate_elem = item.find('div', class_='rate-value')
+                    if name_elem and rate_elem:
+                        bank_name = name_elem.get_text(strip=True)
+                        rate_str = rate_elem.get_text(strip=True).replace('%', '').replace(',', '.')
+                        try:
+                            rate = float(rate_str)
+                            rates[bank_name] = rate
+                        except:
+                            continue
+        
+        return rates if rates else None
+    except Exception as e:
+        st.warning(f"Ошибка парсинга ставок: {e}")
+        return None
     # ---- Попытка 2: exchangerate.host ----
     try:
         end_date = datetime.now()
@@ -755,7 +825,7 @@ with tab4:
 # ================================
 with tab5:
     st.subheader("🏦 Лучшие предложения по вкладам в РФ")
-    st.caption("Данные по ставкам обновляются автоматически с сайта bankinform.ru. Если загрузка не удалась, используются резервные значения.")
+    st.caption("Ставки обновляются автоматически с bankinform.ru. Если сайт недоступен, используются резервные значения.")
 
     col_sum, col_time = st.columns(2)
     with col_sum:
@@ -765,32 +835,12 @@ with tab5:
 
     st.divider()
 
-    # --- Функция для парсинга ставок с bankinform.ru ---
-    @st.cache_data(ttl=3600)  # обновляем раз в час
-    def fetch_bank_rates_from_aggregator():
-        """
-        Пытается получить актуальные ставки с bankinform.ru.
-        Возвращает словарь {название_банка: ставка}
-        """
-        rates = {}
-        try:
-            # Пример: страница со ставками по вкладам
-            url = "https://bankinform.ru/deposits/rate/"
-            response = requests.get(url, timeout=10)
-            if response.status_code != 200:
-                return None
-            # Здесь нужен парсинг HTML — это сложно и зависит от структуры сайта
-            # Для примера возвращаем None, чтобы использовать резерв
-            return None
-        except:
-            return None
-
-    # --- Резервные ставки (ручные, но с правильными ссылками) ---
-    BANK_RATES = [
+    # --- Резервные ставки (ручные) ---
+    DEFAULT_RATES = [
         {"name": "Сбербанк", "rate": 13.80, "min_sum": 100000, "term_months": 6, 
          "note": "Премиум вклад", "url": "https://www.sberbank.com/common/img/uploaded/sberbank1/public/sb_vip_leaflet_vkladi.pdf"},
         {"name": "Т-Банк", "rate": 15.00, "min_sum": 50000, "term_months": 6, 
-         "note": "Т-Вклад (с капитализацией)", "url": "https://www.tbank.ru/invest/social/profile/Trading_View/6b80eb17-be29-4317-8626-0f56dea040e8/"},
+         "note": "Т-Вклад", "url": "https://www.tbank.ru/invest/social/profile/Trading_View/6b80eb17-be29-4317-8626-0f56dea040e8/"},
         {"name": "ВТБ", "rate": 14.00, "min_sum": 100000, "term_months": 6, 
          "note": "Вклад в рублях", "url": "https://www.vtb.ru/personal/deposits/"},
         {"name": "Альфа-Банк", "rate": 19.83, "min_sum": 10000, "term_months": 3, 
@@ -798,7 +848,7 @@ with tab5:
         {"name": "Газпромбанк", "rate": 16.25, "min_sum": 100000, "term_months": 12, 
          "note": "Ключевой момент", "url": "https://www.gazprombank.ru/personal/increase/deposits/detail/7937943/"},
         {"name": "Озон Банк", "rate": 13.60, "min_sum": 10000, "term_months": 4, 
-         "note": "Вклад с капитализацией", "url": "https://finance.ozon.ru/promo/deposit/landing"},
+         "note": "С капитализацией", "url": "https://finance.ozon.ru/promo/deposit/landing"},
         {"name": "Райффайзенбанк", "rate": 11.00, "min_sum": 50000, "term_months": 6, 
          "note": "Фиксированный", "url": "https://www.raiffeisen.ru/common/img/uploaded/files/retail/deposits/fixed.pdf"},
         {"name": "ПСБ", "rate": 18.30, "min_sum": 100000, "term_months": 6, 
@@ -809,20 +859,38 @@ with tab5:
          "note": "Хорошая ставка", "url": "https://mkb.ru/personal/deposits/"},
     ]
 
-    # --- Пробуем загрузить актуальные ставки ---
-    auto_rates = fetch_bank_rates_from_aggregator()
-    if auto_rates:
-        # Если удалось получить ставки — обновляем
-        for bank in BANK_RATES:
-            if bank["name"] in auto_rates:
-                bank["rate"] = auto_rates[bank["name"]]
-        st.success("✅ Ставки обновлены автоматически!")
-    else:
-        st.info("ℹ️ Используются резервные ставки. Для актуальных данных перейдите по ссылкам на сайты банков.")
+    # --- Пытаемся получить актуальные ставки ---
+    parsed_rates = fetch_bank_rates_from_aggregator()
+    
+    # Создаём список банков для отображения
+    banks_to_show = []
+    for bank in DEFAULT_RATES:
+        # Ищем в спарсенных данных по названию банка (с учётом возможных различий)
+        matched_rate = None
+        if parsed_rates:
+            # Пробуем найти точное совпадение
+            if bank["name"] in parsed_rates:
+                matched_rate = parsed_rates[bank["name"]]
+            else:
+                # Пробуем поиск по части названия (например, "Сбербанк" vs "Сбер")
+                for key in parsed_rates:
+                    if bank["name"].lower() in key.lower() or key.lower() in bank["name"].lower():
+                        matched_rate = parsed_rates[key]
+                        break
+        # Если нашли ставку — используем её, иначе оставляем резервную
+        rate = matched_rate if matched_rate is not None else bank["rate"]
+        banks_to_show.append({
+            "name": bank["name"],
+            "rate": rate,
+            "min_sum": bank["min_sum"],
+            "term_months": bank["term_months"],
+            "note": bank["note"],
+            "url": bank["url"]
+        })
 
     # --- Расчёт и вывод таблицы ---
     results = []
-    for bank in BANK_RATES:
+    for bank in banks_to_show:
         profit_before_tax = calc_sum * (bank["rate"] / 100) * (calc_term / 12)
         tax_13 = profit_before_tax * 0.13
         profit_after_tax = profit_before_tax - tax_13
@@ -847,4 +915,7 @@ with tab5:
         unsafe_allow_html=True
     )
 
-    st.info("💡 **Как проверить актуальность ставок:** перейдите по ссылке на сайт банка. Там вы всегда найдёте свежие условия.")
+    if parsed_rates:
+        st.success("✅ Ставки обновлены автоматически с bankinform.ru.")
+    else:
+        st.info("ℹ️ Используются резервные ставки. Проверьте соединение с интернетом или перейдите по ссылкам на сайты банков для уточнения.")
