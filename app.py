@@ -837,7 +837,7 @@ with tab5:
     st.divider()
 
     # --- Ссылка на твою Google Таблицу (CSV) ---
-    CSV_URL = https://docs.google.com/spreadsheets/d/12Q_sO0LAinyQfcw6C3jQ7O1S7coLJJgJ92qL0RnoZCc/edit?gid=0#gid=0  # ЗАМЕНИ НА СВОЮ ССЫЛКУ
+    CSV_URL = "https://docs.google.com/spreadsheets/d/12Q_sO0LAinyQfcw6C3jQ7O1S7coLJJgJ92qL0RnoZCc/edit?gid=0#gid=0"  # ЗАМЕНИ НА СВОЮ ССЫЛКУ
 
     # --- Загружаем данные из Google Sheets ---
     loaded_banks = load_rates_from_csv(CSV_URL)
