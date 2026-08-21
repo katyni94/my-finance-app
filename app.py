@@ -262,15 +262,16 @@ ASSETS_DB = build_assets_db()
 
 # ================= БАЗА БАНКОВСКИХ СТАВОК =================
 BANK_RATES = [
-    {"name": "Сбербанк", "rate": 18.50, "min_sum": 100000, "term_months": 6, "note": "Накопительный счет"},
-    {"name": "Т-Банк (Тинькофф)", "rate": 19.20, "min_sum": 50000, "term_months": 6, "note": "С пополнением"},
-    {"name": "ВТБ", "rate": 18.70, "min_sum": 100000, "term_months": 6, "note": "Лучший для пенсионеров"},
-    {"name": "Альфа-Банк", "rate": 19.00, "min_sum": 50000, "term_months": 3, "note": "Короткий срок"},
-    {"name": "Газпромбанк", "rate": 18.40, "min_sum": 100000, "term_months": 6, "note": "Надежный"},
-    {"name": "Райффайзенбанк", "rate": 18.20, "min_sum": 50000, "term_months": 6, "note": "Для премиум"},
-    {"name": "ПСБ", "rate": 18.30, "min_sum": 100000, "term_months": 6, "note": "Гос. поддержка"},
-    {"name": "Совкомбанк", "rate": 18.60, "min_sum": 30000, "term_months": 6, "note": "Для всех"},
-    {"name": "МКБ", "rate": 18.90, "min_sum": 100000, "term_months": 6, "note": "Хорошая ставка"},
+    {"name": "Сбербанк", "rate": 18.50, "min_sum": 100000, "term_months": 6, "note": "Накопительный счет", "url": "https://www.sberbank.com/ru/person/contributions"},
+    {"name": "Т-Банк (Тинькофф)", "rate": 19.20, "min_sum": 50000, "term_months": 6, "note": "С пополнением", "url": "https://www.tbank.ru/investments/savings/"},
+    {"name": "ВТБ", "rate": 18.70, "min_sum": 100000, "term_months": 6, "note": "Лучший для пенсионеров", "url": "https://www.vtb.ru/personal/deposits/"},
+    {"name": "Альфа-Банк", "rate": 19.00, "min_sum": 50000, "term_months": 3, "note": "Короткий срок", "url": "https://alfabank.ru/make-money/deposits/"},
+    {"name": "Озон Банк", "rate": 19.50, "min_sum": 10000, "term_months": 6, "note": "Накопительный счет", "url": "https://www.ozon.ru/bank/"},
+    {"name": "Газпромбанк", "rate": 18.40, "min_sum": 100000, "term_months": 6, "note": "Надежный", "url": "https://www.gazprombank.ru/personal/deposits/"},
+    {"name": "Райффайзенбанк", "rate": 18.20, "min_sum": 50000, "term_months": 6, "note": "Для премиум", "url": "https://www.raiffeisen.ru/contributions/"},
+    {"name": "ПСБ", "rate": 18.30, "min_sum": 100000, "term_months": 6, "note": "Гос. поддержка", "url": "https://www.psbank.ru/private/deposits"},
+    {"name": "Совкомбанк", "rate": 18.60, "min_sum": 30000, "term_months": 6, "note": "Для всех", "url": "https://sovcombank.ru/deposits"},
+    {"name": "МКБ", "rate": 18.90, "min_sum": 100000, "term_months": 6, "note": "Хорошая ставка", "url": "https://mkb.ru/personal/deposits/"},
 ]
 
 # ================= ВКЛАДКИ =================
@@ -754,7 +755,7 @@ with tab4:
 # ================================
 with tab5:
     st.subheader("🏦 Лучшие предложения по вкладам в РФ")
-    st.caption("Данные основаны на текущей ключевой ставке ЦБ РФ (~19%) и актуальны на 2026 год. Информация носит ознакомительный характер.")
+    st.caption("Данные основаны на текущей ключевой ставке ЦБ РФ (~19%) и актуальны на 2026 год. Информация носит ознакомительный характер. Кликните на название банка, чтобы перейти на официальную страницу с тарифами.")
 
     col_sum, col_time = st.columns(2)
     with col_sum:
@@ -771,8 +772,11 @@ with tab5:
         profit_after_tax = profit_before_tax - tax_13
         total_amount = calc_sum + profit_after_tax
         
+        # Формируем HTML-ссылку на название банка
+        bank_link = f'<a href="{bank["url"]}" target="_blank">{bank["name"]}</a>'
+        
         results.append({
-            "Банк": bank["name"],
+            "Банк": bank_link,
             "Ставка": f"{bank['rate']}%",
             "Мин. сумма": f"{bank['min_sum']:,.0f} ₽",
             "Примечание": bank["note"],
@@ -784,15 +788,8 @@ with tab5:
     df_results = pd.DataFrame(results)
     df_results = df_results.sort_values(by="Прибыль после налога 13% (₽)", ascending=False)
 
-    st.dataframe(
-        df_results, 
-        use_container_width=True, 
-        hide_index=True,
-        column_config={
-            "Итоговая сумма (₽)": st.column_config.NumberColumn(format="%.2f ₽"),
-            "Прибыль до налога (₽)": st.column_config.NumberColumn(format="%.2f ₽"),
-            "Прибыль после налога 13% (₽)": st.column_config.NumberColumn(format="%.2f ₽"),
-        }
+    # Отображаем таблицу с поддержкой HTML в колонке "Банк"
+    st.write(
+        df_results.to_html(escape=False, index=False),
+        unsafe_allow_html=True
     )
-
-    st.info("💡 **О налоге на вклады:** Согласно законодательству РФ, налогом (13%) облагается не вся прибыль, а только та часть, которая превышает 1 млн ₽ или превышает сумму, рассчитанную по ключевой ставке ЦБ. Для упрощения расчетов мы вычли 13% со всей прибыли. Реальная сумма к выплате может быть немного выше, чем указано в таблице.")
