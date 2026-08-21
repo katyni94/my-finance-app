@@ -228,7 +228,7 @@ with tab2:
     if st.button("Собрать портфель и получить план"):
         with st.spinner("Загружаем цены и просчитываем стратегию..."):
             MIN_POSITION_RUB = 3000 
-                        tickers_to_check = ["GC=F", "BTC-USD", "NVDA", "SBER", "USDRUB", "CNYRUB", "SU26227RMFS4"]
+            tickers_to_check = ["GC=F", "BTC-USD", "NVDA", "SBER", "USDRUB", "CNYRUB", "SU26227RMFS4"]
             prices = {t: 0.0 for t in tickers_to_check}
 
             # Получаем курс доллара из ЦБ (для конвертации USD-активов)
