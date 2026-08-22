@@ -35,11 +35,12 @@ def check_password():
                 st.error("Неверный пароль")
     return False
 
+# ---- Настройки страницы ----
 st.set_page_config(page_title="Спортивный аналитик", layout="wide")
 if not check_password():
     st.stop()
 
-st.title("⚽ Спортивный аналитик — поиск валуйных ставок")
+st.title("⚽ Спортивный аналитик — ИИ прогнозы + валуйные ставки")
 
 # ---- Инициализация состояния ----
 if 'last_request_time' not in st.session_state:
@@ -65,6 +66,38 @@ def can_request_odds(limit=500):
     if st.session_state.odds_request_count >= limit:
         return False, st.session_state.odds_request_count, limit
     return True, st.session_state.odds_request_count, limit
+
+# ---- Словарь лиг Bet Better ----
+BETBETTER_LEAGUES = {
+    "АПЛ (Англия)": "soccer/epl",
+    "Ла Лига (Испания)": "soccer/la-liga",
+    "Бундеслига (Германия)": "soccer/bundesliga",
+    "Серия А (Италия)": "soccer/serie-a",
+    "Лига 1 (Франция)": "soccer/ligue-1",
+    "Лига Чемпионов": "soccer/world-cup",
+}
+
+# ---- Функция для запроса ИИ-прогнозов от Bet Better ----
+@st.cache_data(ttl=900)
+def fetch_betbetter_predictions(league_slug, min_probability=0):
+    try:
+        url = f"https://betbetter.world/{league_slug}/picks.aspx?format=json"
+        headers = {
+            'Accept': 'application/json',
+            'User-Agent': 'betbetter-mcp/1.0 (+https://betbetter.world/api)'
+        }
+        response = requests.get(url, headers=headers, timeout=15)
+        if response.status_code != 200:
+            st.warning(f"Bet Better API вернул ошибку: {response.status_code}")
+            return []
+        data = response.json()
+        picks = data.get('picks', [])
+        if min_probability > 0:
+            picks = [p for p in picks if p.get('modelProbabilityPct', 0) >= min_probability]
+        return picks
+    except Exception as e:
+        st.warning(f"Ошибка при запросе к Bet Better API: {e}")
+        return []
 
 # ---- Флаги и утилиты ----
 FLAGS = {
@@ -225,6 +258,11 @@ with st.sidebar:
             "Лига Чемпионов": 2001,
         }[comp_name]
         flag = FLAGS.get(comp_name, "⚽")
+        league_slug = BETBETTER_LEAGUES.get(comp_name)
+        if league_slug:
+            st.info("🤖 ИИ-прогнозы от Bet Better будут использоваться для этого турнира.")
+        else:
+            st.warning("⚠️ Для этой лиги нет ИИ-прогнозов от Bet Better. Будет использована статистическая модель.")
     else:
         comp_name = None
         comp_id = None
@@ -241,16 +279,19 @@ with st.sidebar:
     
     with st.expander("ℹ️ Как это работает"):
         st.markdown("""
+        **🤖 ИИ-прогнозы от Bet Better:**
+        - Бесплатный сервис, который на основе машинного обучения даёт вероятность победы для каждой команды.
+        - Прогнозы доступны для топ-лиг (АПЛ, Ла Лига, Бундеслига, Серия А, Лига 1, Лига Чемпионов).
+        - Если ИИ-прогноз доступен, он используется вместо статистической модели.
+        
         **Ручной режим:**
-        - Введите названия команд (любые).
-        - Введите коэффициенты букмекера (если есть).
-        - Задайте свою оценку вероятности для каждого исхода (сумма = 100%).
-        - Приложение сравнит вашу оценку с букмекерской и покажет валуйность.
+        - Введите любые команды и свои оценки вероятностей.
+        - Приложение сравнит вашу оценку с коэффициентами и покажет валуйность.
         """)
 
 # ---- Основная логика ----
 if st.button("🚀 Анализировать"):
-    # Для ручного режима создадим форму для ввода матчей
+    # ---- Ручной режим ----
     if mode == "Ручной ввод (любые команды)":
         st.subheader("Введите данные матча")
         with st.form("manual_form"):
@@ -274,7 +315,6 @@ if st.button("🚀 Анализировать"):
             with col_a_prob:
                 prob_a = st.number_input("Победа гостей %", min_value=0, max_value=100, value=30, step=1, key="prob_a")
             
-            # Нормализуем сумму до 100%
             total = prob_h + prob_d + prob_a
             if total == 0:
                 st.error("Сумма вероятностей не может быть нулевой.")
@@ -286,12 +326,10 @@ if st.button("🚀 Анализировать"):
             submitted = st.form_submit_button("Рассчитать валуйность")
         
         if submitted:
-            # Вычисляем букмекерскую вероятность
             if home_odd > 0 and draw_odd > 0 and away_odd > 0:
                 implied_h = 1/home_odd
                 implied_d = 1/draw_odd
                 implied_a = 1/away_odd
-                # Нормализуем маржу
                 margin = implied_h + implied_d + implied_a
                 if margin > 0:
                     implied_h /= margin
@@ -300,7 +338,6 @@ if st.button("🚀 Анализировать"):
             else:
                 implied_h = implied_d = implied_a = None
             
-            # Проверяем валуйность
             value_found = False
             best_bet = None
             best_value = 0
@@ -324,7 +361,6 @@ if st.button("🚀 Анализировать"):
                     best_bet = f"{away} (кф {away_odd:.2f})"
                     value_found = True
             
-            # Вывод результатов
             st.divider()
             st.subheader("📊 Результат анализа")
             
@@ -347,22 +383,18 @@ if st.button("🚀 Анализировать"):
                 st.success(f"✅ Найдена валуйная ставка! {stars}\n\nРекомендуемая ставка: **{best_bet}**")
             else:
                 st.info("⏳ Валуйных ставок не обнаружено. Ваша оценка не выше букмекерской.")
-    
+
+    # ---- Автоматический режим ----
     else:
-        # ---- Автоматический режим (как раньше) ----
-        # Проверяем лимит
+        # Проверяем лимит запросов к Football-Data.org
         can_request, wait_seconds = can_make_request(30)
         if not can_request:
             st.warning(f"⏳ Подождите {wait_seconds} секунд перед следующим запросом.")
             st.stop()
         
-        with st.spinner("Загружаем данные..."):
+        with st.spinner("Загружаем данные и ИИ-прогнозы..."):
             try:
-                if mode == "Автоматический (турниры)":
-                    matches, team_stats = fetch_matches_and_standings(comp_id, football_key)
-                else:
-                    matches = fetch_all_matches(football_key)
-                    team_stats = {}
+                matches, team_stats = fetch_matches_and_standings(comp_id, football_key)
                 st.session_state.last_request_time = datetime.now()
             except Exception as e:
                 if "429" in str(e):
@@ -380,7 +412,32 @@ if st.button("🚀 Анализировать"):
             st.info("Нет предстоящих матчей.")
             st.stop()
         
-        # Загружаем коэффициенты
+        # Загружаем ИИ-прогнозы от Bet Better
+        betbetter_picks = []
+        if league_slug:
+            betbetter_picks = fetch_betbetter_predictions(league_slug)
+            if betbetter_picks:
+                st.success(f"✅ Загружено {len(betbetter_picks)} ИИ-прогнозов от Bet Better")
+            else:
+                st.warning("⚠️ ИИ-прогнозы от Bet Better не загружены. Использую статистическую модель.")
+        else:
+            st.info("Для этой лиги нет ИИ-прогнозов. Использую статистическую модель.")
+        
+        # Строим индекс по матчам для быстрого поиска прогноза
+        betbetter_map = {}
+        for pick in betbetter_picks:
+            game = pick.get('game', '')
+            if ' @ ' in game:
+                away_team, home_team = game.split(' @ ', 1)
+                # Убираем лишние пробелы
+                home_team = home_team.strip()
+                away_team = away_team.strip()
+                # Сохраняем прогноз для каждой команды
+                betbetter_map[(home_team, away_team)] = pick
+                # Также пробуем очищенные названия
+                betbetter_map[(clean_team_name(home_team), clean_team_name(away_team))] = pick
+
+        # Загружаем коэффициенты (если выбран авто-режим)
         odds_data = {}
         if odds_source == "Автоматически (TheOddsAPI)" and odds_key:
             odds_data = fetch_odds_from_odds_api(odds_key)
@@ -389,7 +446,7 @@ if st.button("🚀 Анализировать"):
                 st.success(f"✅ Загружены коэффициенты для {len(odds_data)} матчей (запросов: {used}/500)")
             else:
                 st.warning("⚠️ Не удалось загрузить коэффициенты. Будет ручной ввод.")
-        
+
         results = []
         for match in matches:
             home = match['homeTeam']['name']
@@ -397,43 +454,93 @@ if st.button("🚀 Анализировать"):
             match_date = match['utcDate'][:10]
             home_clean = clean_team_name(home)
             away_clean = clean_team_name(away)
-            
-            # Рассчёт вероятностей на основе статистики (если есть)
-            h = team_stats.get(home, {})
-            a = team_stats.get(away, {})
-            if not h or not a:
-                prob_home = 0.40
-                prob_draw = 0.30
-                prob_away = 0.30
+
+            # ---- Ищем ИИ-прогноз от Bet Better ----
+            ai_pick = None
+            # Ищем по точному совпадению
+            if (home, away) in betbetter_map:
+                ai_pick = betbetter_map[(home, away)]
+            elif (home_clean, away_clean) in betbetter_map:
+                ai_pick = betbetter_map[(home_clean, away_clean)]
             else:
-                h_ppg = h.get('points', 0) / max(1, h.get('played', 1))
-                a_ppg = a.get('points', 0) / max(1, a.get('played', 1))
-                h_gd = (h.get('goals_for', 0) - h.get('goals_against', 0)) / max(1, h.get('played', 1))
-                a_gd = (a.get('goals_for', 0) - a.get('goals_against', 0)) / max(1, a.get('played', 1))
-                home_boost = 0.15
-                home_rating = h_ppg + h_gd + home_boost
-                away_rating = a_ppg + a_gd
-                total_rating = home_rating + away_rating
-                if total_rating > 0:
-                    prob_home = home_rating / total_rating
-                    prob_away = away_rating / total_rating
+                # Ищем по частичному совпадению (на случай, если названия немного отличаются)
+                for (h, a), pick in betbetter_map.items():
+                    if (home_clean in h and away_clean in a) or (home in h and away in a):
+                        ai_pick = pick
+                        break
+
+            # ---- Если есть ИИ-прогноз - используем его ----
+            if ai_pick:
+                selection = ai_pick.get('selection', '')
+                prob_pct = ai_pick.get('modelProbabilityPct', 50)
+                confidence = ai_pick.get('confidence', 'LEAN')
+                verdict = ai_pick.get('verdict', '')
+                # Переводим вероятность в доли
+                if selection == home or selection == home_clean:
+                    prob_home = prob_pct / 100
+                    # Остальную вероятность делим между ничьей и гостями (приблизительно)
+                    remaining = 1 - prob_home
+                    prob_draw = remaining * 0.5
+                    prob_away = remaining * 0.5
+                elif selection == away or selection == away_clean:
+                    prob_away = prob_pct / 100
+                    remaining = 1 - prob_away
+                    prob_home = remaining * 0.5
+                    prob_draw = remaining * 0.5
                 else:
-                    prob_home = prob_away = 0.4
-                prob_draw = 1 - prob_home - prob_away
-                prob_home = max(0.05, min(0.85, prob_home))
-                prob_away = max(0.05, min(0.85, prob_away))
-                prob_draw = max(0.05, min(0.50, prob_draw))
+                    # Если выбор не совпал (бывает, если прогноз на ничью? но Bet Better даёт выбор команды)
+                    # тогда используем вероятности из модели
+                    prob_home = prob_pct / 100
+                    prob_away = 0.3
+                    prob_draw = 0.3
+                # Нормализуем
                 total = prob_home + prob_draw + prob_away
-                prob_home /= total
-                prob_draw /= total
-                prob_away /= total
-            
-            # Коэффициенты
+                if total > 0:
+                    prob_home /= total
+                    prob_draw /= total
+                    prob_away /= total
+                source = f"🤖 Bet Better ({confidence})"
+                if verdict:
+                    source += f": {verdict}"
+                st.caption(f"Источник прогноза: {source}")
+            else:
+                # ---- Иначе используем статистическую модель ----
+                h = team_stats.get(home, {})
+                a = team_stats.get(away, {})
+                if not h or not a:
+                    prob_home = 0.40
+                    prob_draw = 0.30
+                    prob_away = 0.30
+                else:
+                    h_ppg = h.get('points', 0) / max(1, h.get('played', 1))
+                    a_ppg = a.get('points', 0) / max(1, a.get('played', 1))
+                    h_gd = (h.get('goals_for', 0) - h.get('goals_against', 0)) / max(1, h.get('played', 1))
+                    a_gd = (a.get('goals_for', 0) - a.get('goals_against', 0)) / max(1, a.get('played', 1))
+                    home_boost = 0.15
+                    home_rating = h_ppg + h_gd + home_boost
+                    away_rating = a_ppg + a_gd
+                    total_rating = home_rating + away_rating
+                    if total_rating > 0:
+                        prob_home = home_rating / total_rating
+                        prob_away = away_rating / total_rating
+                    else:
+                        prob_home = prob_away = 0.4
+                    prob_draw = 1 - prob_home - prob_away
+                    prob_home = max(0.05, min(0.85, prob_home))
+                    prob_away = max(0.05, min(0.85, prob_away))
+                    prob_draw = max(0.05, min(0.50, prob_draw))
+                    total = prob_home + prob_draw + prob_away
+                    prob_home /= total
+                    prob_draw /= total
+                    prob_away /= total
+                source = "📊 Статистическая модель"
+
+            # ---- Коэффициенты (из API или ручной ввод) ----
             home_odds = None
             away_odds = None
             draw_odds = None
             bookmaker_name = "Неизвестная БК"
-            
+
             if odds_source == "Автоматически (TheOddsAPI)" and odds_data:
                 key = (home, away)
                 if key in odds_data:
@@ -449,8 +556,8 @@ if st.button("🚀 Анализировать"):
                             draw_odds = val['draw']
                             bookmaker_name = val['bookmaker']
                             break
-            
-            # Если коэффициенты не загружены, предлагаем ручной ввод (прямо в интерфейсе)
+
+            # Если коэффициенты не загружены, предлагаем ручной ввод
             if not (home_odds and away_odds and draw_odds):
                 st.markdown(f"**Введите коэффициенты для {home_clean} vs {away_clean}:**")
                 col_h, col_d, col_a = st.columns(3)
@@ -461,12 +568,13 @@ if st.button("🚀 Анализировать"):
                 with col_a:
                     away_odds = st.number_input(f"Победа {away_clean}", min_value=1.0, max_value=20.0, value=2.0, step=0.1, key=f"a_{home}_{away}")
                 bookmaker_name = "Ручной ввод"
-            
+
+            # ---- Поиск валуйной ставки ----
             def value_found(prob, odds):
                 if prob is None or odds is None or odds <= 0:
                     return False
                 return prob > 1/odds
-            
+
             best_bet = None
             best_value = 0
             if home_odds and prob_home > 0 and value_found(prob_home, home_odds):
@@ -484,13 +592,13 @@ if st.button("🚀 Анализировать"):
                 if value > best_value:
                     best_value = value
                     best_bet = f"{away_clean} (кф {away_odds:.2f})"
-            
+
             if best_bet:
                 stars = "⭐" * min(5, int(best_value * 20) + 1)
                 recommendation = f"{stars} {best_bet}"
             else:
                 recommendation = "⏳ Нет явных валуйных ставок"
-            
+
             results.append({
                 "Дата": match_date,
                 "Хозяева": home_clean,
@@ -503,29 +611,30 @@ if st.button("🚀 Анализировать"):
                 "Кф ничья": draw_odds,
                 "Кф гости": away_odds,
                 "Букмекер": bookmaker_name,
+                "Источник прогноза": source,
                 "value": best_value,
                 "is_value": best_value > 0 and home_odds is not None and draw_odds is not None and away_odds is not None
             })
-        
-        # Фильтрация и вывод
+
+        # ---- Фильтрация и вывод ----
         if show_only_value:
             results = [r for r in results if r['is_value']]
             if not results:
                 st.info("Нет матчей с валуйными ставками.")
                 st.stop()
-        
+
         st.success(f"✅ Найдено {len(results)} матчей")
         df = pd.DataFrame(results)
         df['Дата'] = pd.to_datetime(df['Дата'])
         dates = sorted(df['Дата'].unique())
-        
+
         for date in dates:
             st.subheader(f"📅 {date.strftime('%d %B %Y')}")
             day_matches = df[df['Дата'] == date]
             for _, row in day_matches.iterrows():
                 with st.container():
                     st.markdown(f"{flag} **{row['Хозяева']}** vs **{row['Гости']}**")
-                    st.caption(f"Букмекер: {row['Букмекер']}")
+                    st.caption(f"Источник прогноза: {row['Источник прогноза']} | Букмекер: {row['Букмекер']}")
                     col1, col2, col3 = st.columns(3)
                     with col1:
                         st.progress(row['Победа хозяев'], text=f"Победа хозяев: {row['Победа хозяев']:.0%}")
@@ -541,7 +650,7 @@ if st.button("🚀 Анализировать"):
                             st.caption(f"Кф: {row['Кф гости']:.2f}")
                     st.markdown(f"**Рекомендация:** {row['Рекомендация']}")
                     st.divider()
-        
+
         if st.checkbox("Показать график сравнения вероятностей"):
             plot_df = df.copy()
             plot_df['match'] = plot_df['Хозяева'] + " vs " + plot_df['Гости']
@@ -561,9 +670,11 @@ if st.button("🚀 Анализировать"):
                 height=400
             )
             st.plotly_chart(fig, use_container_width=True)
-        
+
         st.caption("""
         **Интерпретация:**
         - Прогресс-бары показывают вероятность каждого исхода.
         - ⭐ — чем больше звёзд, тем выше потенциальная ценность ставки.
+        - 🤖 — прогноз от ИИ-модели Bet Better (на основе машинного обучения).
+        - 📊 — прогноз на основе статистической модели (турнирная таблица).
         """)
