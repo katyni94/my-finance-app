@@ -539,13 +539,30 @@ if st.session_state.data_loaded:
             st.info("Нет матчей с явными преимуществами по коэффициентам.")
             st.stop()
 
-      # ---- Вывод в компактных карточках ----
+         # ---- Вывод в компактных карточках ----
     st.success(f"✅ Найдено {len(results)} матчей")
     df = pd.DataFrame(results)
     df['Дата'] = pd.to_datetime(df['Дата'])
     dates = sorted(df['Дата'].unique())
 
     num_cols = 2
+
+    # Немного CSS для уменьшения полей ввода
+    st.markdown("""
+    <style>
+        /* Уменьшаем ширину числовых полей ввода */
+        div[data-testid="stNumberInput"] input {
+            width: 60px !important;
+            font-size: 14px !important;
+            padding: 4px !important;
+        }
+        /* Уменьшаем отступы между колонками */
+        div[data-testid="column"] {
+            padding-left: 2px !important;
+            padding-right: 2px !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
 
     for date in dates:
         st.subheader(f"📅 {date.strftime('%d %B %Y')}")
@@ -568,28 +585,49 @@ if st.session_state.data_loaded:
                                 st.caption("Кф: — / — / —")
                             st.markdown(f"**Рекомендация:** {row['Рекомендация']}")
                             
-                            # ---- Если нужен ручной ввод, показываем компактные поля ----
+                            # ---- Компактный ручной ввод ----
                             if row['manual_input_needed']:
                                 st.markdown("---")
-                                st.caption("Введите коэффициенты (обновляется автоматически):")
-                                # Используем три колонки с маленькими полями
-                                c1, c2, c3 = st.columns(3)
-                                # Уникальные ключи для сессии
+                                st.caption("Введите коэф. (обновляется автоматически):")
+                                # Три колонки для полей
+                                c1, c2, c3 = st.columns([1, 1, 1])
                                 key_h = f"odds_h_{row['Хозяева']}_{row['Гости']}"
                                 key_d = f"odds_d_{row['Хозяева']}_{row['Гости']}"
                                 key_a = f"odds_a_{row['Хозяева']}_{row['Гости']}"
-                                # Инициализация, если нет в сессии
                                 if key_h not in st.session_state:
                                     st.session_state[key_h] = 2.0
                                     st.session_state[key_d] = 3.0
                                     st.session_state[key_a] = 2.0
                                 with c1:
-                                    st.number_input("🏠", min_value=1.0, max_value=20.0, value=st.session_state[key_h], step=0.1, key=key_h, format="%.2f", label_visibility="collapsed")
+                                    st.number_input(
+                                        "🏠",
+                                        min_value=1.0, max_value=20.0,
+                                        value=st.session_state[key_h],
+                                        step=0.1, key=key_h,
+                                        format="%.2f",
+                                        label_visibility="collapsed",
+                                        use_container_width=False
+                                    )
                                 with c2:
-                                    st.number_input("🤝", min_value=1.0, max_value=20.0, value=st.session_state[key_d], step=0.1, key=key_d, format="%.2f", label_visibility="collapsed")
+                                    st.number_input(
+                                        "🤝",
+                                        min_value=1.0, max_value=20.0,
+                                        value=st.session_state[key_d],
+                                        step=0.1, key=key_d,
+                                        format="%.2f",
+                                        label_visibility="collapsed",
+                                        use_container_width=False
+                                    )
                                 with c3:
-                                    st.number_input("🚀", min_value=1.0, max_value=20.0, value=st.session_state[key_a], step=0.1, key=key_a, format="%.2f", label_visibility="collapsed")
-                            
+                                    st.number_input(
+                                        "🚀",
+                                        min_value=1.0, max_value=20.0,
+                                        value=st.session_state[key_a],
+                                        step=0.1, key=key_a,
+                                        format="%.2f",
+                                        label_visibility="collapsed",
+                                        use_container_width=False
+                                    )
                             st.markdown("---")
 
     # ---- График (опционально) ----
