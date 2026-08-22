@@ -1,5 +1,4 @@
 import streamlit as st
-import requestsimport streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
@@ -224,11 +223,9 @@ def fetch_odds_from_odds_api(api_key, sport='soccer', region='eu', market='h2h')
 # ---- Функция загрузки данных для выбранной лиги ----
 def load_league_data(league_name, force=False):
     """Загружает данные для указанной лиги. Если force=True, игнорирует кэш."""
-    # Если force=True, удаляем кэш для этой лиги
     if force and league_name in st.session_state.league_cache:
         del st.session_state.league_cache[league_name]
     
-    # Если данные уже есть, не загружаем повторно
     if league_name in st.session_state.league_cache:
         return
     
@@ -294,11 +291,6 @@ with st.sidebar:
     st.divider()
     
     # ---- БЛОК ОБНОВЛЕНИЯ ДАННЫХ ----
-    # Выбор лиги для обновления (можно сделать селектор, но проще использовать текущую вкладку)
-    # Мы добавим кнопку обновления для текущей активной вкладки
-    # Для этого нужно знать, какая вкладка активна. Streamlit не даёт прямого доступа к активной вкладке,
-    # поэтому мы добавим кнопку, которая обновляет все лиги или конкретную, выбранную в выпадающем списке.
-    # Сделаем просто: выпадающий список лиг для обновления и кнопка "Обновить выбранную лигу".
     refresh_league = st.selectbox(
         "Выберите лигу для обновления",
         list(FLAGS.keys()),
