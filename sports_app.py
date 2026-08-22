@@ -101,7 +101,6 @@ def can_request_odds(limit=500):
 
 # ---- Функции для работы с коэффициентами ----
 def update_odds_from_session():
-    """Обновляет st.session_state.odds_data из значений в st.session_state (поля ввода)"""
     for key in list(st.session_state.keys()):
         if key.startswith('num_') and key.endswith('_h'):
             match_id = key[4:-2]
@@ -268,66 +267,51 @@ def load_csv_data(league_code):
     """Загружает CSV-файл с football-data.co.uk для указанной лиги"""
     if league_code is None:
         return None
-    url = f"https://www.football-data.co.uk/new/{league_code}.csv"
-    try:
-        response = requests.get(url, timeout=10)
-        if response.status_code != 200:
-            return None
-        df = pd.read_csv(StringIO(response.text))
-        # Приводим колонки к единому виду
-        # В разных файлах могут быть разные названия, но обычно есть Date, HomeTeam, AwayTeam, FTHG, FTAG, FTR
-        # Переименовываем для удобства
-        rename_cols = {
-            'Date': 'Date',
-            'HomeTeam': 'HomeTeam',
-            'AwayTeam': 'AwayTeam',
-            'FTHG': 'HomeGoals',
-            'FTAG': 'AwayGoals',
-            'FTR': 'Result'  # H, D, A
-        }
-        # Проверяем наличие колонок, если нет, пытаемся использовать стандартные
-        if 'Date' not in df.columns:
-            return None
-        # Преобразуем дату
-        df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
-        # Удаляем строки с некорректной датой
-        df = df.dropna(subset=['Date'])
-        # Сортируем по дате
-        df = df.sort_values('Date')
-        return df
-    except Exception as e:
-        st.warning(f"Ошибка загрузки CSV для {league_code}: {e}")
-        return None
+    # Пробуем несколько возможных URL
+    urls = [
+        f"https://www.football-data.co.uk/new/{league_code}.csv",
+        f"https://www.football-data.co.uk/current/{league_code}.csv",
+        f"https://www.football-data.co.uk/archive/{league_code}.csv"
+    ]
+    for url in urls:
+        try:
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                df = pd.read_csv(StringIO(response.text))
+                # Проверяем наличие обязательных колонок
+                if 'Date' in df.columns and 'HomeTeam' in df.columns and 'AwayTeam' in df.columns:
+                    df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
+                    df = df.dropna(subset=['Date'])
+                    df = df.sort_values('Date')
+                    return df
+        except:
+            continue
+    return None
 
 def find_team_name_mapping(api_name, csv_team_names):
-    """Пытается найти соответствие между названием команды из API и списком из CSV"""
     api_clean = clean_team_name(api_name).lower()
     for csv_name in csv_team_names:
         csv_clean = clean_team_name(csv_name).lower()
         if api_clean == csv_clean:
             return csv_name
-        # Если одно содержит другое
         if api_clean in csv_clean or csv_clean in api_clean:
             return csv_name
     return None
 
 def get_team_form(csv_df, team_name, n_matches=5):
-    """Возвращает очки и разницу голов команды за последние n матчей"""
-    # Фильтруем матчи до сегодня (исключаем будущие)
     today = datetime.now().date()
     df_past = csv_df[csv_df['Date'].dt.date < today]
     if df_past.empty:
         return 0, 0
-    
-    # Ищем матчи с участием команды (как дома, так и в гостях)
     home_matches = df_past[df_past['HomeTeam'] == team_name][['Date', 'HomeGoals', 'AwayGoals']].copy()
+    if 'HomeGoals' not in home_matches.columns:
+        # если колонки называются иначе
+        return 0, 0
     home_matches['Points'] = home_matches.apply(lambda row: 3 if row['HomeGoals'] > row['AwayGoals'] else (1 if row['HomeGoals'] == row['AwayGoals'] else 0), axis=1)
     home_matches['GD'] = home_matches['HomeGoals'] - home_matches['AwayGoals']
     away_matches = df_past[df_past['AwayTeam'] == team_name][['Date', 'HomeGoals', 'AwayGoals']].copy()
     away_matches['Points'] = away_matches.apply(lambda row: 3 if row['AwayGoals'] > row['HomeGoals'] else (1 if row['HomeGoals'] == row['AwayGoals'] else 0), axis=1)
     away_matches['GD'] = away_matches['AwayGoals'] - away_matches['HomeGoals']
-    
-    # Объединяем и сортируем по дате (последние матчи)
     all_matches = pd.concat([home_matches, away_matches]).sort_values('Date', ascending=False)
     last_n = all_matches.head(n_matches)
     if last_n.empty:
@@ -335,15 +319,11 @@ def get_team_form(csv_df, team_name, n_matches=5):
     return last_n['Points'].sum(), last_n['GD'].sum()
 
 def get_h2h(csv_df, home_team, away_team, n_matches=3):
-    """Возвращает процент побед хозяев, ничьих и гостей за последние n встреч между командами"""
-    # Фильтруем матчи между этими командами (в любом порядке)
     mask = ((csv_df['HomeTeam'] == home_team) & (csv_df['AwayTeam'] == away_team)) | \
            ((csv_df['HomeTeam'] == away_team) & (csv_df['AwayTeam'] == home_team))
     h2h_matches = csv_df[mask].copy()
     if h2h_matches.empty:
-        return 0.33, 0.34, 0.33  # равные шансы по умолчанию
-    
-    # Сортируем по дате и берём последние n
+        return 0.33, 0.34, 0.33
     h2h_matches = h2h_matches.sort_values('Date', ascending=False).head(n_matches)
     wins_home = 0
     draws = 0
@@ -356,7 +336,7 @@ def get_h2h(csv_df, home_team, away_team, n_matches=3):
                 draws += 1
             else:
                 wins_away += 1
-        else:  # row['HomeTeam'] == away_team
+        else:
             if row['AwayGoals'] > row['HomeGoals']:
                 wins_home += 1
             elif row['HomeGoals'] == row['AwayGoals']:
@@ -380,7 +360,6 @@ def load_league_data(league_name, force=False):
     league_code = LEAGUE_CSV_CODES.get(league_name)
     
     with st.spinner(f"Загружаем данные для {league_name}..."):
-        # Загружаем матчи и таблицу из API
         try:
             matches, team_stats = fetch_matches_and_standings(comp_id, football_key)
         except Exception as e:
@@ -391,7 +370,6 @@ def load_league_data(league_name, force=False):
                 st.error(f"Ошибка загрузки матчей: {e}")
                 return
         
-        # Загружаем CSV для улучшенного алгоритма
         csv_df = None
         if league_code:
             csv_df = load_csv_data(league_code)
@@ -400,12 +378,10 @@ def load_league_data(league_name, force=False):
             else:
                 st.warning(f"⚠️ Не удалось загрузить CSV для {league_name}. Будет использована упрощённая модель.")
         
-        # Загружаем Bet Better прогнозы
         betbetter_picks = []
         if league_slug:
             betbetter_picks = fetch_betbetter_predictions(league_slug)
         
-        # Загружаем коэффициенты (если есть ключ)
         odds_data = {}
         if odds_key:
             odds_data = fetch_odds_from_odds_api(odds_key)
@@ -534,12 +510,10 @@ for i, league_name in enumerate(league_names):
         csv_df = league_data.get('csv_data', None)
         flag = FLAGS.get(league_name, "⚽")
         
-        # Подготовка словарей для быстрого доступа к данным CSV
         csv_team_names = None
         if csv_df is not None and not csv_df.empty:
             csv_team_names = pd.concat([csv_df['HomeTeam'], csv_df['AwayTeam']]).unique()
         
-        # Построение индекса для Bet Better
         betbetter_map = {}
         for pick in betbetter_picks or []:
             game = pick.get('game', '')
@@ -573,7 +547,6 @@ for i, league_name in enumerate(league_names):
                         break
             
             # ---- Расчёт вероятностей (улучшенный алгоритм) ----
-            # Сначала получаем базовые данные из API (таблица)
             h_points = 0
             h_played = 1
             a_points = 0
@@ -583,52 +556,44 @@ for i, league_name in enumerate(league_names):
             if home in team_stats:
                 h_points = team_stats[home].get('points', 0)
                 h_played = team_stats[home].get('played', 1)
-                h_gd = (team_stats[home].get('goals_for', 0) - team_stats[home].get('goals_against', 0)) / h_played
+                # защита от деления на ноль
+                h_gd = (team_stats[home].get('goals_for', 0) - team_stats[home].get('goals_against', 0)) / h_played if h_played > 0 else 0
             if away in team_stats:
                 a_points = team_stats[away].get('points', 0)
                 a_played = team_stats[away].get('played', 1)
-                a_gd = (team_stats[away].get('goals_for', 0) - team_stats[away].get('goals_against', 0)) / a_played
+                a_gd = (team_stats[away].get('goals_for', 0) - team_stats[away].get('goals_against', 0)) / a_played if a_played > 0 else 0
             
             h_ppg = h_points / h_played if h_played > 0 else 0
             a_ppg = a_points / a_played if a_played > 0 else 0
             
-            # Инициализация дополнительных факторов
             home_form_points = 0
             away_form_points = 0
-            home_form_gd = 0
-            away_form_gd = 0
             h2h_home = 0.33
             h2h_draw = 0.34
             h2h_away = 0.33
+            home_csv_name = None
+            away_csv_name = None
             
-            # Если есть CSV, пытаемся получить форму и личные встречи
             if csv_df is not None and not csv_df.empty and csv_team_names is not None:
-                # Находим соответствие названий команд
                 home_csv_name = find_team_name_mapping(home, csv_team_names)
                 away_csv_name = find_team_name_mapping(away, csv_team_names)
                 if home_csv_name and away_csv_name:
-                    home_form_points, home_form_gd = get_team_form(csv_df, home_csv_name, 5)
-                    away_form_points, away_form_gd = get_team_form(csv_df, away_csv_name, 5)
+                    home_form_points, _ = get_team_form(csv_df, home_csv_name, 5)
+                    away_form_points, _ = get_team_form(csv_df, away_csv_name, 5)
                     h2h_home, h2h_draw, h2h_away = get_h2h(csv_df, home_csv_name, away_csv_name, 3)
             
             # ---- Комбинированный рейтинг ----
-            # Нормализуем форму (макс 15 очков за 5 матчей)
             home_form_ratio = min(home_form_points / 15.0, 1.0)
             away_form_ratio = min(away_form_points / 15.0, 1.0)
-            
-            # Нормализуем сезонный рейтинг (очки за игру) - макс 3
             h_ppg_norm = min(h_ppg / 3.0, 1.0)
             a_ppg_norm = min(a_ppg / 3.0, 1.0)
             
-            # Веса факторов
             weight_form = 0.5
             weight_season = 0.3
             weight_h2h = 0.2
             
             home_strength = (home_form_ratio * weight_form) + (h_ppg_norm * weight_season) + (h2h_home * weight_h2h)
             away_strength = (away_form_ratio * weight_form) + (a_ppg_norm * weight_season) + (h2h_away * weight_h2h)
-            
-            # Бонус домашнего поля (фиксированный, но можно улучшить)
             home_boost = 0.10
             home_strength += home_boost
             
@@ -641,7 +606,6 @@ for i, league_name in enumerate(league_names):
                 prob_away = 0.4
             prob_draw = 1 - prob_home - prob_away
             
-            # Ограничиваем
             prob_home = max(0.05, min(0.85, prob_home))
             prob_away = max(0.05, min(0.85, prob_away))
             prob_draw = max(0.05, min(0.50, prob_draw))
@@ -650,53 +614,39 @@ for i, league_name in enumerate(league_names):
             prob_draw /= total
             prob_away /= total
             
-            # Если есть Bet Better прогноз с высокой уверенностью, можно скорректировать (опционально)
-            if ai_pick and ai_pick.get('confidence') in ['HIGH', 'LEAN']:
-                # Можно усреднить с моделью или использовать как ориентир
-                # Но оставим пока нашу модель, т.к. мы её улучшаем
-                pass
-            
             source = "📊 Улучшенная модель"
             if csv_df is None or csv_df.empty:
                 source = "📊 Статистическая модель (без CSV)"
             
-            # ---- Коэффициенты (как раньше) ----
+            # ---- Коэффициенты ----
             home_odds = None
             away_odds = None
             draw_odds = None
             bookmaker_name = "Неизвестная БК"
             manual_input_needed = False
             
-            # Проверяем, есть ли API-коэффициенты
             api_odds_found = False
-            api_home_odds = None
-            api_away_odds = None
-            api_draw_odds = None
-            api_bookmaker = "Неизвестная БК"
             if odds_data_api:
                 key = (home, away)
                 if key in odds_data_api:
-                    api_home_odds = odds_data_api[key]['home_win']
-                    api_away_odds = odds_data_api[key]['away_win']
-                    api_draw_odds = odds_data_api[key]['draw']
-                    api_bookmaker = odds_data_api[key]['bookmaker']
+                    home_odds = odds_data_api[key]['home_win']
+                    away_odds = odds_data_api[key]['away_win']
+                    draw_odds = odds_data_api[key]['draw']
+                    bookmaker_name = odds_data_api[key]['bookmaker']
                     api_odds_found = True
                 else:
                     for (h, a), val in odds_data_api.items():
                         if clean_team_name(h) == home_clean and clean_team_name(a) == away_clean:
-                            api_home_odds = val['home_win']
-                            api_away_odds = val['away_win']
-                            api_draw_odds = val['draw']
-                            api_bookmaker = val['bookmaker']
+                            home_odds = val['home_win']
+                            away_odds = val['away_win']
+                            draw_odds = val['draw']
+                            bookmaker_name = val['bookmaker']
                             api_odds_found = True
                             break
             
             manual_input_needed = not api_odds_found
             if api_odds_found:
-                home_odds = api_home_odds
-                away_odds = api_away_odds
-                draw_odds = api_draw_odds
-                bookmaker_name = api_bookmaker
+                pass  # используем api_odds
             else:
                 if match_id not in st.session_state.odds_data:
                     st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
@@ -737,7 +687,6 @@ for i, league_name in enumerate(league_names):
                     rec_text = f"Рекомендуем {away_clean} (вероятность {prob_away:.0%})"
                 recommendation = f"📈 {rec_text}"
             
-            # Дополнительная информация для отображения
             extra_info = ""
             if csv_df is not None and not csv_df.empty and home_csv_name and away_csv_name:
                 extra_info = f"Форма: {home_csv_name} {home_form_points} очков за 5 матчей, {away_csv_name} {away_form_points} очков"
@@ -764,10 +713,8 @@ for i, league_name in enumerate(league_names):
                 "extra_info": extra_info
             })
         
-        # Обновляем odds_data из полей ввода
         update_odds_from_session()
         
-        # Фильтры и вывод (без изменений, кроме добавления extra_info)
         if show_only_value:
             results = [r for r in results if r['is_value']]
         if st.session_state.show_best:
@@ -900,20 +847,248 @@ with tabs[-1]:
         odds_data_api = league_data['odds_data']
         betbetter_picks = league_data['betbetter_picks']
         csv_df = league_data.get('csv_data', None)
+        csv_team_names = None
+        if csv_df is not None and not csv_df.empty:
+            csv_team_names = pd.concat([csv_df['HomeTeam'], csv_df['AwayTeam']]).unique()
         
-        # (код аналогичен вычислениям выше, но без дублирования – мы просто переиспользуем данные из лиг)
-        # Для простоты мы можем просто собрать уже готовые результаты из лиг, но чтобы не пересчитывать,
-        # мы можем пройти по матчам и использовать ту же логику, но это дублирование. 
-        # Вместо этого мы можем использовать результаты, уже сохранённые в сессии? У нас нет отдельного хранилища.
-        # Поэтому я повторю вычисления здесь, но это увеличит код. 
-        # Для чистоты кода я рекомендую вынести функцию расчёта матча в отдельную функцию и вызывать её и здесь, и в лигах.
-        # Но чтобы не переписывать всё, я пока оставлю как есть – дублирование небольшое.
-        # Однако для краткости я пропущу полный повтор и просто покажу, как можно переиспользовать данные.
-        # Поскольку код большой, я покажу только изменения в логике сбора all_results.
-        # Но чтобы не загромождать, я предположу, что вы уже имеете эти данные в league_cache.
-        # Реальное решение: в каждом league_cache мы можем хранить уже вычисленные results для каждого матча.
-        # Я добавлю это в следующей версии.
-        pass
+        betbetter_map = {}
+        for pick in betbetter_picks or []:
+            game = pick.get('game', '')
+            if ' @ ' in game:
+                away_team, home_team = game.split(' @ ', 1)
+                home_team = home_team.strip()
+                away_team = away_team.strip()
+                betbetter_map[(home_team, away_team)] = pick
+                betbetter_map[(clean_team_name(home_team), clean_team_name(away_team))] = pick
+        
+        for match in matches:
+            home = match['homeTeam']['name']
+            away = match['awayTeam']['name']
+            match_date = match['utcDate'][:10]
+            matchday = match.get('matchday', '—')
+            home_clean = clean_team_name(home)
+            away_clean = clean_team_name(away)
+            match_id = f"{league_name}_{home}_{away}_{match_date}"
+            
+            # Повторяем расчёты (можно было бы вынести в функцию, но для краткости дублируем)
+            h_points = 0
+            h_played = 1
+            a_points = 0
+            a_played = 1
+            h_gd = 0
+            a_gd = 0
+            if home in team_stats:
+                h_points = team_stats[home].get('points', 0)
+                h_played = team_stats[home].get('played', 1)
+                h_gd = (team_stats[home].get('goals_for', 0) - team_stats[home].get('goals_against', 0)) / h_played if h_played > 0 else 0
+            if away in team_stats:
+                a_points = team_stats[away].get('points', 0)
+                a_played = team_stats[away].get('played', 1)
+                a_gd = (team_stats[away].get('goals_for', 0) - team_stats[away].get('goals_against', 0)) / a_played if a_played > 0 else 0
+            h_ppg = h_points / h_played if h_played > 0 else 0
+            a_ppg = a_points / a_played if a_played > 0 else 0
+            
+            home_form_points = 0
+            away_form_points = 0
+            h2h_home = 0.33
+            h2h_draw = 0.34
+            h2h_away = 0.33
+            home_csv_name = None
+            away_csv_name = None
+            if csv_df is not None and not csv_df.empty and csv_team_names is not None:
+                home_csv_name = find_team_name_mapping(home, csv_team_names)
+                away_csv_name = find_team_name_mapping(away, csv_team_names)
+                if home_csv_name and away_csv_name:
+                    home_form_points, _ = get_team_form(csv_df, home_csv_name, 5)
+                    away_form_points, _ = get_team_form(csv_df, away_csv_name, 5)
+                    h2h_home, h2h_draw, h2h_away = get_h2h(csv_df, home_csv_name, away_csv_name, 3)
+            
+            home_form_ratio = min(home_form_points / 15.0, 1.0)
+            away_form_ratio = min(away_form_points / 15.0, 1.0)
+            h_ppg_norm = min(h_ppg / 3.0, 1.0)
+            a_ppg_norm = min(a_ppg / 3.0, 1.0)
+            
+            weight_form = 0.5
+            weight_season = 0.3
+            weight_h2h = 0.2
+            
+            home_strength = (home_form_ratio * weight_form) + (h_ppg_norm * weight_season) + (h2h_home * weight_h2h)
+            away_strength = (away_form_ratio * weight_form) + (a_ppg_norm * weight_season) + (h2h_away * weight_h2h)
+            home_boost = 0.10
+            home_strength += home_boost
+            
+            total_strength = home_strength + away_strength
+            if total_strength > 0:
+                prob_home = home_strength / total_strength
+                prob_away = away_strength / total_strength
+            else:
+                prob_home = 0.4
+                prob_away = 0.4
+            prob_draw = 1 - prob_home - prob_away
+            prob_home = max(0.05, min(0.85, prob_home))
+            prob_away = max(0.05, min(0.85, prob_away))
+            prob_draw = max(0.05, min(0.50, prob_draw))
+            total = prob_home + prob_draw + prob_away
+            prob_home /= total
+            prob_draw /= total
+            prob_away /= total
+            
+            source = "📊 Улучшенная модель"
+            if csv_df is None or csv_df.empty:
+                source = "📊 Статистическая модель (без CSV)"
+            
+            home_odds = None
+            away_odds = None
+            draw_odds = None
+            bookmaker_name = "Неизвестная БК"
+            if match_id in st.session_state.odds_data:
+                home_odds = st.session_state.odds_data[match_id]['h']
+                away_odds = st.session_state.odds_data[match_id]['a']
+                draw_odds = st.session_state.odds_data[match_id]['d']
+                bookmaker_name = st.session_state.selected_bookmaker
+            else:
+                if odds_data_api:
+                    key = (home, away)
+                    if key in odds_data_api:
+                        home_odds = odds_data_api[key]['home_win']
+                        away_odds = odds_data_api[key]['away_win']
+                        draw_odds = odds_data_api[key]['draw']
+                        bookmaker_name = odds_data_api[key]['bookmaker']
+                    else:
+                        for (h, a), val in odds_data_api.items():
+                            if clean_team_name(h) == home_clean and clean_team_name(a) == away_clean:
+                                home_odds = val['home_win']
+                                away_odds = val['away_win']
+                                draw_odds = val['draw']
+                                bookmaker_name = val['bookmaker']
+                                break
+                if not (home_odds and away_odds and draw_odds):
+                    home_odds = 2.0
+                    away_odds = 2.0
+                    draw_odds = 3.0
+                    bookmaker_name = "Неизвестная БК"
+            
+            best_bet = None
+            best_value = 0
+            if home_odds and prob_home > 0 and prob_home > 1/home_odds:
+                value = prob_home - 1/home_odds
+                if value > best_value:
+                    best_value = value
+                    best_bet = f"{home_clean} (кф {home_odds:.2f})"
+            if draw_odds and prob_draw > 0 and prob_draw > 1/draw_odds:
+                value = prob_draw - 1/draw_odds
+                if value > best_value:
+                    best_value = value
+                    best_bet = f"Ничья (кф {draw_odds:.2f})"
+            if away_odds and prob_away > 0 and prob_away > 1/away_odds:
+                value = prob_away - 1/away_odds
+                if value > best_value:
+                    best_value = value
+                    best_bet = f"{away_clean} (кф {away_odds:.2f})"
+            
+            if best_bet:
+                stars = "⭐" * min(5, int(best_value * 20) + 1)
+                recommendation = f"{stars} {best_bet}"
+            else:
+                max_prob = max(prob_home, prob_draw, prob_away)
+                if max_prob == prob_home:
+                    rec_text = f"Рекомендуем {home_clean} (вероятность {prob_home:.0%})"
+                elif max_prob == prob_draw:
+                    rec_text = f"Рекомендуем ничью (вероятность {prob_draw:.0%})"
+                else:
+                    rec_text = f"Рекомендуем {away_clean} (вероятность {prob_away:.0%})"
+                recommendation = f"📈 {rec_text}"
+            
+            all_results.append({
+                "id": match_id,
+                "Дата": match_date,
+                "Тур": matchday,
+                "Лига": league_name,
+                "Хозяева": home_clean,
+                "Гости": away_clean,
+                "Победа хозяев": prob_home,
+                "Ничья": prob_draw,
+                "Победа гостей": prob_away,
+                "Рекомендация": recommendation,
+                "Кф хозяев": home_odds,
+                "Кф ничья": draw_odds,
+                "Кф гости": away_odds,
+                "Букмекер": bookmaker_name,
+                "Источник прогноза": source,
+                "value": best_value,
+                "is_value": best_value > 0 and home_odds is not None and draw_odds is not None and away_odds is not None,
+                "match_id": match_id
+            })
     
-    # Временная заглушка – показываем сообщение, что данные загружаются из лиг.
-    st.info("Данные для лучших матчей собираются из лиг автоматически. Проверьте вкладки лиг.")
+    if show_only_value:
+        all_results = [r for r in all_results if r['is_value']]
+    if st.session_state.show_best:
+        target_date = st.session_state.filter_date
+        filtered = []
+        for r in all_results:
+            try:
+                r_date = datetime.strptime(r['Дата'], '%Y-%m-%d').date()
+                if r_date == target_date:
+                    filtered.append(r)
+            except:
+                pass
+        all_results = filtered
+    all_results.sort(key=lambda x: x.get('value', 0), reverse=True)
+    
+    if not all_results:
+        st.info("Нет матчей с валуйными ставками.")
+    else:
+        st.success(f"✅ Найдено {len(all_results)} лучших матчей")
+        df_all = pd.DataFrame(all_results)
+        st.markdown("""
+        <style>
+            div[data-testid="stNumberInput"] input { width: 60px !important; font-size: 14px !important; padding: 4px !important; }
+            div[data-testid="column"] { padding-left: 2px !important; padding-right: 2px !important; }
+        </style>
+        """, unsafe_allow_html=True)
+        num_cols = 2
+        df_all['Дата'] = pd.to_datetime(df_all['Дата'])
+        dates_sorted = sorted(df_all['Дата'].unique())
+        for date in dates_sorted:
+            st.subheader(f"📅 {date.strftime('%d %B %Y')}")
+            day_items = df_all[df_all['Дата'] == date].to_dict('records')
+            for i in range(0, len(day_items), num_cols):
+                cols = st.columns(num_cols)
+                for col_idx, col in enumerate(cols):
+                    if i + col_idx < len(day_items):
+                        row = day_items[i + col_idx]
+                        with col:
+                            with st.container():
+                                st.markdown(f"{FLAGS.get(row['Лига'], '⚽')} **{row['Хозяева']}** vs **{row['Гости']}**")
+                                st.caption(f"{row['Лига']} | Тур {row['Тур']} | {row['Источник прогноза']} | Букмекер: {row['Букмекер']}")
+                                prob_str = f"🏠 {row['Победа хозяев']:.0%}  |  🤝 {row['Ничья']:.0%}  |  🚀 {row['Победа гостей']:.0%}"
+                                st.markdown(prob_str)
+                                if row['Кф хозяев'] and row['Кф ничья'] and row['Кф гости']:
+                                    st.caption(f"Кф: {row['Кф хозяев']:.2f} / {row['Кф ничья']:.2f} / {row['Кф гости']:.2f}")
+                                else:
+                                    st.caption("Кф: — / — / —")
+                                st.markdown(f"**Рекомендация:** {row['Рекомендация']}")
+                                
+                                is_selected = row['id'] in st.session_state.selected_matches
+                                if st.checkbox("➕ В комбинацию", value=is_selected, key=f"best_sel_{row['id']}"):
+                                    if row['id'] not in st.session_state.selected_matches:
+                                        st.session_state.selected_matches[row['id']] = row
+                                else:
+                                    if row['id'] in st.session_state.selected_matches:
+                                        del st.session_state.selected_matches[row['id']]
+                                st.markdown("---")
+        
+        if st.checkbox("Показать график сравнения вероятностей для лучших матчей", key="show_graph_best"):
+            plot_df = df_all.copy()
+            plot_df['match'] = plot_df['Хозяева'] + " vs " + plot_df['Гости']
+            fig = go.Figure()
+            for outcome in ['Победа хозяев', 'Ничья', 'Победа гостей']:
+                fig.add_trace(go.Bar(
+                    x=plot_df['match'],
+                    y=plot_df[outcome],
+                    name=outcome,
+                    text=[f"{v:.0%}" for v in plot_df[outcome]],
+                    textposition='inside'
+                ))
+            fig.update_layout(barmode='group', yaxis_title='Вероятность', xaxis_tickangle=-45, height=400)
+            st.plotly_chart(fig, use_container_width=True)
