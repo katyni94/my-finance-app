@@ -4,7 +4,6 @@ import pandas as pd
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import re
-import time
 
 # ---- Аутентификация ----
 def check_password():
@@ -284,6 +283,11 @@ with st.sidebar:
         - Прогнозы доступны для топ-лиг (АПЛ, Ла Лига, Бундеслига, Серия А, Лига 1, Лига Чемпионов).
         - Если ИИ-прогноз доступен, он используется вместо статистической модели.
         
+        **📊 Коэффициенты:**
+        - Автоматически загружаются через TheOddsAPI (если есть ключ и данные).
+        - Если автоматическая загрузка не удалась, появляются поля для ручного ввода.
+        - Вы можете ввести коэффициенты из своей БК или пропустить этот шаг.
+        
         **Ручной режим:**
         - Введите любые команды и свои оценки вероятностей.
         - Приложение сравнит вашу оценку с коэффициентами и покажет валуйность.
@@ -293,7 +297,7 @@ with st.sidebar:
 if st.button("🚀 Анализировать"):
     # ---- Ручной режим ----
     if mode == "Ручной ввод (любые команды)":
-        st.subheader("Введите данные матча")
+        st.subheader("✏️ Введите данные матча")
         with st.form("manual_form"):
             home = st.text_input("Хозяева", value="Команда А")
             away = st.text_input("Гости", value="Команда Б")
@@ -429,12 +433,9 @@ if st.button("🚀 Анализировать"):
             game = pick.get('game', '')
             if ' @ ' in game:
                 away_team, home_team = game.split(' @ ', 1)
-                # Убираем лишние пробелы
                 home_team = home_team.strip()
                 away_team = away_team.strip()
-                # Сохраняем прогноз для каждой команды
                 betbetter_map[(home_team, away_team)] = pick
-                # Также пробуем очищенные названия
                 betbetter_map[(clean_team_name(home_team), clean_team_name(away_team))] = pick
 
         # Загружаем коэффициенты (если выбран авто-режим)
@@ -457,13 +458,11 @@ if st.button("🚀 Анализировать"):
 
             # ---- Ищем ИИ-прогноз от Bet Better ----
             ai_pick = None
-            # Ищем по точному совпадению
             if (home, away) in betbetter_map:
                 ai_pick = betbetter_map[(home, away)]
             elif (home_clean, away_clean) in betbetter_map:
                 ai_pick = betbetter_map[(home_clean, away_clean)]
             else:
-                # Ищем по частичному совпадению (на случай, если названия немного отличаются)
                 for (h, a), pick in betbetter_map.items():
                     if (home_clean in h and away_clean in a) or (home in h and away in a):
                         ai_pick = pick
@@ -475,10 +474,8 @@ if st.button("🚀 Анализировать"):
                 prob_pct = ai_pick.get('modelProbabilityPct', 50)
                 confidence = ai_pick.get('confidence', 'LEAN')
                 verdict = ai_pick.get('verdict', '')
-                # Переводим вероятность в доли
                 if selection == home or selection == home_clean:
                     prob_home = prob_pct / 100
-                    # Остальную вероятность делим между ничьей и гостями (приблизительно)
                     remaining = 1 - prob_home
                     prob_draw = remaining * 0.5
                     prob_away = remaining * 0.5
@@ -488,12 +485,9 @@ if st.button("🚀 Анализировать"):
                     prob_home = remaining * 0.5
                     prob_draw = remaining * 0.5
                 else:
-                    # Если выбор не совпал (бывает, если прогноз на ничью? но Bet Better даёт выбор команды)
-                    # тогда используем вероятности из модели
                     prob_home = prob_pct / 100
                     prob_away = 0.3
                     prob_draw = 0.3
-                # Нормализуем
                 total = prob_home + prob_draw + prob_away
                 if total > 0:
                     prob_home /= total
@@ -502,7 +496,6 @@ if st.button("🚀 Анализировать"):
                 source = f"🤖 Bet Better ({confidence})"
                 if verdict:
                     source += f": {verdict}"
-                st.caption(f"Источник прогноза: {source}")
             else:
                 # ---- Иначе используем статистическую модель ----
                 h = team_stats.get(home, {})
@@ -557,9 +550,12 @@ if st.button("🚀 Анализировать"):
                             bookmaker_name = val['bookmaker']
                             break
 
-            # Если коэффициенты не загружены, предлагаем ручной ввод
+            # Если коэффициенты не загружены, предлагаем ручной ввод с улучшенным оформлением
             if not (home_odds and away_odds and draw_odds):
-                st.markdown(f"**Введите коэффициенты для {home_clean} vs {away_clean}:**")
+                st.markdown("---")
+                st.markdown(f"**🎯 Введите коэффициенты для матча:**")
+                st.markdown(f"**{home_clean}** vs **{away_clean}**")
+                st.caption("Если коэффициенты не загружены автоматически, введите их из вашей БК. Если оставить как есть — сравнение с букмекером не будет выполнено.")
                 col_h, col_d, col_a = st.columns(3)
                 with col_h:
                     home_odds = st.number_input(f"Победа {home_clean}", min_value=1.0, max_value=20.0, value=2.0, step=0.1, key=f"h_{home}_{away}")
