@@ -619,34 +619,35 @@ if st.button("🚀 Анализировать"):
                 st.info("Нет матчей с валуйными ставками.")
                 st.stop()
 
+               # ---- Вывод в компактных карточках (2-3 в строке) ----
         st.success(f"✅ Найдено {len(results)} матчей")
         df = pd.DataFrame(results)
         df['Дата'] = pd.to_datetime(df['Дата'])
         dates = sorted(df['Дата'].unique())
 
+        num_cols = 2  # количество карточек в строке
+
         for date in dates:
             st.subheader(f"📅 {date.strftime('%d %B %Y')}")
-            day_matches = df[df['Дата'] == date]
-            for _, row in day_matches.iterrows():
-                with st.container():
-                    st.markdown(f"{flag} **{row['Хозяева']}** vs **{row['Гости']}**")
-                    st.caption(f"Источник прогноза: {row['Источник прогноза']} | Букмекер: {row['Букмекер']}")
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.progress(row['Победа хозяев'], text=f"Победа хозяев: {row['Победа хозяев']:.0%}")
-                        if row['Кф хозяев']:
-                            st.caption(f"Кф: {row['Кф хозяев']:.2f}")
-                    with col2:
-                        st.progress(row['Ничья'], text=f"Ничья: {row['Ничья']:.0%}")
-                        if row['Кф ничья']:
-                            st.caption(f"Кф: {row['Кф ничья']:.2f}")
-                    with col3:
-                        st.progress(row['Победа гостей'], text=f"Победа гостей: {row['Победа гостей']:.0%}")
-                        if row['Кф гости']:
-                            st.caption(f"Кф: {row['Кф гости']:.2f}")
-                    st.markdown(f"**Рекомендация:** {row['Рекомендация']}")
-                    st.divider()
-
+            day_matches = df[df['Дата'] == date].to_dict('records')
+            
+            for i in range(0, len(day_matches), num_cols):
+                cols = st.columns(num_cols)
+                for col_idx, col in enumerate(cols):
+                    if i + col_idx < len(day_matches):
+                        row = day_matches[i + col_idx]
+                        with col:
+                            with st.container():
+                                st.markdown(f"{flag} **{row['Хозяева']}** vs **{row['Гости']}**")
+                                st.caption(f"{row['Источник прогноза']} | Букмекер: {row['Букмекер']}")
+                                prob_str = f"🏠 {row['Победа хозяев']:.0%}  |  🤝 {row['Ничья']:.0%}  |  🚀 {row['Победа гостей']:.0%}"
+                                st.markdown(prob_str)
+                                if row['Кф хозяев'] and row['Кф ничья'] and row['Кф гости']:
+                                    st.caption(f"Кф: {row['Кф хозяев']:.2f} / {row['Кф ничья']:.2f} / {row['Кф гости']:.2f}")
+                                else:
+                                    st.caption("Кф: — / — / —")
+                                st.markdown(f"**{row['Рекомендация']}**")
+                                st.markdown("---")
         if st.checkbox("Показать график сравнения вероятностей"):
             plot_df = df.copy()
             plot_df['match'] = plot_df['Хозяева'] + " vs " + plot_df['Гости']
