@@ -403,7 +403,7 @@ if st.button("🚀 Найти лучшие ставки"):
             if not odds_available:
                 recommendation = "⚖️ Коэффициенты не загружены"
             if odds_source == "Автоматически (TheOddsAPI)" and odds_key:
-    odds_data = fetch_odds_from_odds_api(odds_key)
+            odds_data = fetch_odds_from_odds_api(odds_key)
     if odds_data:
         # Показываем количество использованных запросов
         used = st.session_state.odds_request_count
