@@ -222,7 +222,9 @@ def fetch_odds_from_odds_api(api_key, sport='soccer', region='eu', market='h2h')
         }
         resp = requests.get(url, params=params, timeout=10)
         if resp.status_code != 200:
-            st.warning(f"Не удалось загрузить коэффициенты: {resp.status_code}")
+            # Не показываем предупреждение для 401, просто возвращаем пустой словарь
+            if resp.status_code != 401:
+                st.warning(f"Не удалось загрузить коэффициенты: {resp.status_code}")
             return {}
         data = resp.json()
         st.session_state.odds_request_count += 1
@@ -259,10 +261,9 @@ def fetch_odds_from_odds_api(api_key, sport='soccer', region='eu', market='h2h')
                     break
         return odds_map
     except Exception as e:
-        st.warning(f"Ошибка загрузки коэффициентов: {e}")
         return {}
 
-# ---- Новые функции для улучшенного алгоритма (исправленные) ----
+# ---- Новые функции для улучшенного алгоритма ----
 @st.cache_data(ttl=3600)
 def load_csv_data(league_code):
     if league_code is None:
@@ -277,19 +278,15 @@ def load_csv_data(league_code):
             response = requests.get(url, timeout=10)
             if response.status_code == 200:
                 df = pd.read_csv(StringIO(response.text))
-                # Проверяем обязательные колонки
                 if 'Date' in df.columns and 'HomeTeam' in df.columns and 'AwayTeam' in df.columns:
-                    # Пытаемся преобразовать дату в разных форматах
                     for fmt in ('%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d', '%m/%d/%Y'):
                         try:
                             df['Date'] = pd.to_datetime(df['Date'], format=fmt, errors='coerce')
                             break
                         except:
                             continue
-                    # Если не удалось, пробуем с dayfirst=True (для формата дд/мм/гггг)
                     if df['Date'].isna().all():
                         df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
-                    # Удаляем строки с некорректной датой
                     df = df.dropna(subset=['Date'])
                     if not df.empty:
                         df = df.sort_values('Date')
@@ -309,7 +306,6 @@ def find_team_name_mapping(api_name, csv_team_names):
     return None
 
 def get_team_form(csv_df, team_name, n_matches=5):
-    # Убедимся, что Date - datetime
     if not pd.api.types.is_datetime64_any_dtype(csv_df['Date']):
         csv_df['Date'] = pd.to_datetime(csv_df['Date'], errors='coerce')
     csv_df = csv_df.dropna(subset=['Date'])
@@ -317,7 +313,6 @@ def get_team_form(csv_df, team_name, n_matches=5):
     df_past = csv_df[csv_df['Date'].dt.date < today]
     if df_past.empty:
         return 0, 0
-    # Проверяем наличие колонок с голами
     if 'HomeGoals' not in df_past.columns or 'AwayGoals' not in df_past.columns:
         if 'FTHG' in df_past.columns and 'FTAG' in df_past.columns:
             df_past = df_past.rename(columns={'FTHG': 'HomeGoals', 'FTAG': 'AwayGoals'})
@@ -336,7 +331,6 @@ def get_team_form(csv_df, team_name, n_matches=5):
     return last_n['Points'].sum(), last_n['GD'].sum()
 
 def get_h2h(csv_df, home_team, away_team, n_matches=3):
-    # Убедимся, что Date - datetime (хотя мы не используем .dt в этой функции, но для безопасности)
     if not pd.api.types.is_datetime64_any_dtype(csv_df['Date']):
         csv_df['Date'] = pd.to_datetime(csv_df['Date'], errors='coerce')
     csv_df = csv_df.dropna(subset=['Date'])
@@ -415,6 +409,7 @@ def load_league_data(league_name, force=False):
         odds_data = {}
         if odds_key:
             odds_data = fetch_odds_from_odds_api(odds_key)
+            # если есть ошибка 401, fetch_odds_from_odds_api вернёт пустой словарь, сообщение не появится
         
         st.session_state.league_cache[league_name] = {
             'matches': matches,
@@ -426,9 +421,8 @@ def load_league_data(league_name, force=False):
 
 def refresh_current_league(league_name):
     load_league_data(league_name, force=True)
-    st.rerun()
 
-# ---- Боковая панель (без изменений) ----
+# ---- Боковая панель ----
 with st.sidebar:
     st.header("⚙️ Настройки")
     bookmaker = st.selectbox(
@@ -444,6 +438,7 @@ with st.sidebar:
     if st.button("🔄 Обновить данные для выбранной лиги"):
         refresh_current_league(refresh_league)
         st.success(f"Данные для {refresh_league} обновлены!")
+        st.rerun()
     st.divider()
     st.header("🔍 Фильтр по дате")
     filter_date = st.date_input("Выберите дату", value=st.session_state.filter_date, key="date_filter")
@@ -471,9 +466,7 @@ with st.sidebar:
     if uploaded_file is not None:
         try:
             df = pd.read_csv(uploaded_file)
-            # Проверяем структуру
             if 'Date' in df.columns and 'HomeTeam' in df.columns and 'AwayTeam' in df.columns:
-                # Конвертируем дату
                 for fmt in ('%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d', '%m/%d/%Y'):
                     try:
                         df['Date'] = pd.to_datetime(df['Date'], format=fmt, errors='coerce')
@@ -489,6 +482,7 @@ with st.sidebar:
                     st.warning("⚠️ В файле нет колонок с голами (FTHG/FTAG или HomeGoals/AwayGoals). Форма команд будет рассчитываться без разницы голов.")
                 st.session_state.uploaded_csvs[csv_league_to_upload] = df
                 st.success(f"✅ Файл загружен для {csv_league_to_upload}! {len(df)} матчей.")
+                # Обновляем кэш для этой лиги без rerun
                 load_league_data(csv_league_to_upload, force=True)
                 st.rerun()
             else:
@@ -586,7 +580,7 @@ for i, league_name in enumerate(league_names):
         odds_data_api = league_data['odds_data']
         betbetter_picks = league_data['betbetter_picks']
         csv_df = league_data.get('csv_data', None)
-        # Проверка, не появился ли CSV в uploaded_csvs после кэширования
+        # Проверка на появление CSV после кэширования
         if csv_df is None and league_name in st.session_state.uploaded_csvs and st.session_state.uploaded_csvs[league_name] is not None:
             csv_df = st.session_state.uploaded_csvs[league_name]
             league_data['csv_data'] = csv_df
@@ -628,7 +622,7 @@ for i, league_name in enumerate(league_names):
                         ai_pick = pick
                         break
             
-            # ---- Расчёт вероятностей (улучшенный алгоритм) ----
+            # ---- Расчёт вероятностей ----
             h_points = 0
             h_played = 1
             a_points = 0
@@ -665,7 +659,6 @@ for i, league_name in enumerate(league_names):
                     away_form_points, _ = get_team_form(csv_df, away_csv_name, 5)
                     h2h_home, h2h_draw, h2h_away = get_h2h(csv_df, home_csv_name, away_csv_name, 3)
             
-            # ---- Комбинированный рейтинг ----
             home_form_ratio = min(home_form_points / 15.0, 1.0)
             away_form_ratio = min(away_form_points / 15.0, 1.0)
             h_ppg_norm = min(h_ppg / 3.0, 1.0)
