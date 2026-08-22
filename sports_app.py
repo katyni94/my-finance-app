@@ -1,4 +1,5 @@
 import streamlit as st
+import requestsimport streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
@@ -220,8 +221,17 @@ def fetch_odds_from_odds_api(api_key, sport='soccer', region='eu', market='h2h')
         st.warning(f"Ошибка загрузки коэффициентов: {e}")
         return {}
 
-# ---- Функция загрузки данных для выбранной лиги (без искусственной задержки) ----
-def load_league_data(league_name):
+# ---- Функция загрузки данных для выбранной лиги ----
+def load_league_data(league_name, force=False):
+    """Загружает данные для указанной лиги. Если force=True, игнорирует кэш."""
+    # Если force=True, удаляем кэш для этой лиги
+    if force and league_name in st.session_state.league_cache:
+        del st.session_state.league_cache[league_name]
+    
+    # Если данные уже есть, не загружаем повторно
+    if league_name in st.session_state.league_cache:
+        return
+    
     comp_id = COMP_IDS[league_name]
     league_slug = BETBETTER_LEAGUES.get(league_name)
     
@@ -261,6 +271,12 @@ def load_league_data(league_name):
             'odds_data': odds_data
         }
 
+# ---- Функция для обновления данных текущей лиги ----
+def refresh_current_league(league_name):
+    """Принудительно обновляет данные для указанной лиги."""
+    load_league_data(league_name, force=True)
+    st.rerun()
+
 # ---- Боковая панель ----
 with st.sidebar:
     st.header("⚙️ Настройки")
@@ -274,6 +290,23 @@ with st.sidebar:
     st.session_state.selected_bookmaker = bookmaker
     
     show_only_value = st.checkbox("Показать только матчи с явными преимуществами", value=False)
+    
+    st.divider()
+    
+    # ---- БЛОК ОБНОВЛЕНИЯ ДАННЫХ ----
+    # Выбор лиги для обновления (можно сделать селектор, но проще использовать текущую вкладку)
+    # Мы добавим кнопку обновления для текущей активной вкладки
+    # Для этого нужно знать, какая вкладка активна. Streamlit не даёт прямого доступа к активной вкладке,
+    # поэтому мы добавим кнопку, которая обновляет все лиги или конкретную, выбранную в выпадающем списке.
+    # Сделаем просто: выпадающий список лиг для обновления и кнопка "Обновить выбранную лигу".
+    refresh_league = st.selectbox(
+        "Выберите лигу для обновления",
+        list(FLAGS.keys()),
+        key="refresh_league_select"
+    )
+    if st.button("🔄 Обновить данные для выбранной лиги"):
+        refresh_current_league(refresh_league)
+        st.success(f"Данные для {refresh_league} обновлены!")
     
     st.divider()
     
@@ -359,6 +392,9 @@ with st.sidebar:
         - Выбранные матчи сохраняются даже при смене лиги.
         - Общая вероятность и коэффициент рассчитываются автоматически.
         - Оценка риска поможет принять решение.
+        
+        **🔄 Обновление данных:**
+        - Нажмите кнопку «Обновить данные для выбранной лиги», чтобы загрузить свежие матчи и коэффициенты.
         """)
 
 # =================== ВКЛАДКИ ТУРНИРОВ ===================
