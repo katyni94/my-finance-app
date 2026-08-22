@@ -545,7 +545,6 @@ for i, league_name in enumerate(league_names):
             
             if not (home_odds and away_odds and draw_odds):
                 manual_input_needed = True
-                # Унифицированные ключи на основе match_id
                 key_h = f"odds_{match_id}_h"
                 key_d = f"odds_{match_id}_d"
                 key_a = f"odds_{match_id}_a"
@@ -872,9 +871,10 @@ with tabs[-1]:
             
             if not (home_odds and away_odds and draw_odds):
                 manual_input_needed = True
-                key_h = f"odds_{match_id}_h"
-                key_d = f"odds_{match_id}_d"
-                key_a = f"odds_{match_id}_a"
+                # Для "Лучших матчей" используем ключи с префиксом best_, чтобы не конфликтовать с лигами
+                key_h = f"best_odds_{match_id}_h"
+                key_d = f"best_odds_{match_id}_d"
+                key_a = f"best_odds_{match_id}_a"
                 if key_h not in st.session_state:
                     st.session_state[key_h] = 2.0
                     st.session_state[key_d] = 3.0
