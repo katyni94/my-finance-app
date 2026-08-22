@@ -2,56 +2,6 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-
-st.set_page_config(page_title="Спортивный аналитик", layout="wide")
-st.title("⚽ Спортивный аналитик — прототип")
-
-# ---- Загрузка API-ключа ----
-api_key = st.secrets.get("FOOTBALL_API_KEY")
-if not api_key:
-    api_key = st.text_input("Введите ваш API-ключ Football-Data.org", type="password")
-    if not api_key:
-        st.warning("Получите ключ на football-data.org и введите его.")
-        st.stop()
-
-# --- Выбор турнира ---
-competition_id = st.selectbox(
-    "Выберите турнир",
-    options=[
-        {"name": "АПЛ (Англия)", "id": 2021},
-        {"name": "Ла Лига (Испания)", "id": 2014},
-        {"name": "Бундеслига (Германия)", "id": 2002},
-        {"name": "Серия А (Италия)", "id": 2019},
-        {"name": "Лига 1 (Франция)", "id": 2015},
-        {"name": "Лига Чемпионов", "id": 2001},
-    ],
-    format_func=lambda x: x["name"]
-)
-
-if st.button("Загрузить матчи и сделать прогноз"):
-    with st.spinner("Загружаем данные..."):
-        headers = {'X-Auth-Token': api_key}
-        
-        # --- 1. Получаем предстоящие матчи ---
-        url = f"https://api.football-data.org/v4/competitions/{competition_id['id']}/matches"
-        params = {
-            'status': 'SCHEDULED',
-            'dateFrom': datetime.now().strftime('%Y-%m-%d'),
-            'dateTo': (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
-        }
-        response = requests.get(url, headers=headers, params=params)
-        if response.status_code != 200:
-            st.error(f"Ошибка загрузки: {response.status_code} - {response.text}")
-            st.stop()
-        
-        data = response.json()
-        matches = data.get('matches', [])
-        if not matches:
-            st.info("Нет предстоящих матчей в выбранном турнире.")
-            st.stop()import streamlit as st
-import requests
-import pandas as pd
-from datetime import datetime, timedelta
 import plotly.graph_objects as go
 
 st.set_page_config(page_title="Спортивный аналитик", layout="wide")
