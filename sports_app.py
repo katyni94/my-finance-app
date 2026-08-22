@@ -38,7 +38,7 @@ st.set_page_config(page_title="Спортивный аналитик", layout="w
 if not check_password():
     st.stop()
 
-st.title("⚽ Спортивный аналитик — прогнозы на основе ИИ и статистики")
+st.title("⚽ Спортивный аналитик — прогнозы и комбинации")
 
 # ---- Инициализация состояния ----
 if 'data_loaded' not in st.session_state:
@@ -51,6 +51,8 @@ if 'odds_data' not in st.session_state:
     st.session_state.odds_data = None
 if 'betbetter_picks' not in st.session_state:
     st.session_state.betbetter_picks = None
+if 'selected_matches' not in st.session_state:
+    st.session_state.selected_matches = {}  # {match_id: match_data}
 
 # ---- Ограничение запросов ----
 if 'last_request_time' not in st.session_state:
@@ -259,8 +261,11 @@ with st.sidebar:
         - Если коэффициенты не загрузились, появляются компактные поля для ручного ввода.
         - При изменении любого поля валуйность пересчитывается автоматически.
         
-        **🎯 Рекомендация:**
-        - Выбирайте ставку с наибольшим количеством звёзд ⭐ или с самой высокой вероятностью.
+        **🧩 Комбинации:**
+        - Выбирайте матчи чекбоксом «➕ В комбинацию» под карточкой.
+        - Выбранные матчи сохраняются даже при смене лиги.
+        - Общая вероятность и коэффициент рассчитываются автоматически.
+        - Оценка риска поможет принять решение.
         """)
 
 # ---- Кнопка загрузки данных ----
@@ -340,6 +345,7 @@ if st.session_state.data_loaded:
         match_date = match['utcDate'][:10]
         home_clean = clean_team_name(home)
         away_clean = clean_team_name(away)
+        match_id = f"{home}_{away}_{match_date}"
 
         # ---- Ищем ИИ-прогноз от Bet Better ----
         ai_pick = None
@@ -436,7 +442,6 @@ if st.session_state.data_loaded:
 
         if not (home_odds and away_odds and draw_odds):
             manual_input_needed = True
-            # Сохраняем в сессию значения для полей ввода (если ещё нет)
             key_h = f"odds_h_{home}_{away}"
             key_d = f"odds_d_{home}_{away}"
             key_a = f"odds_a_{home}_{away}"
@@ -444,7 +449,6 @@ if st.session_state.data_loaded:
                 st.session_state[key_h] = 2.0
                 st.session_state[key_d] = 3.0
                 st.session_state[key_a] = 2.0
-            # Используем значения из сессии
             home_odds = st.session_state[key_h]
             away_odds = st.session_state[key_a]
             draw_odds = st.session_state[key_d]
@@ -483,6 +487,7 @@ if st.session_state.data_loaded:
             recommendation = f"📈 {rec_text}"
 
         results.append({
+            "id": match_id,
             "Дата": match_date,
             "Хозяева": home_clean,
             "Гости": away_clean,
@@ -553,6 +558,15 @@ if st.session_state.data_loaded:
                                 st.caption("Кф: — / — / —")
                             st.markdown(f"**Рекомендация:** {row['Рекомендация']}")
                             
+                            # ---- Чекбокс для добавления в комбинацию ----
+                            is_selected = row['id'] in st.session_state.selected_matches
+                            if st.checkbox("➕ В комбинацию", value=is_selected, key=f"sel_{row['id']}"):
+                                if row['id'] not in st.session_state.selected_matches:
+                                    st.session_state.selected_matches[row['id']] = row
+                            else:
+                                if row['id'] in st.session_state.selected_matches:
+                                    del st.session_state.selected_matches[row['id']]
+                            
                             # ---- Компактный ручной ввод ----
                             if row['manual_input_needed']:
                                 st.markdown("---")
@@ -590,6 +604,70 @@ if st.session_state.data_loaded:
                                     )
                             st.markdown("---")
 
+    # ---- Блок комбинации (внизу) ----
+    if st.session_state.selected_matches:
+        st.divider()
+        st.header("🧩 Моя комбинация")
+        selected_list = list(st.session_state.selected_matches.values())
+        
+        # Рассчитываем общую вероятность и коэффициент
+        total_prob = 1.0
+        total_odds = 1.0
+        odds_available = True
+        for m in selected_list:
+            # Для комбинации используем самый вероятный исход (по модели)
+            # Можно дать пользователю выбор, но пока возьмём максимальную вероятность
+            max_prob = max(m['Победа хозяев'], m['Ничья'], m['Победа гостей'])
+            total_prob *= max_prob
+            # Берём коэффициент для этого исхода (если есть)
+            if m['Кф хозяев'] and m['Кф ничья'] and m['Кф гости']:
+                if max_prob == m['Победа хозяев']:
+                    odds = m['Кф хозяев']
+                elif max_prob == m['Ничья']:
+                    odds = m['Кф ничья']
+                else:
+                    odds = m['Кф гости']
+                total_odds *= odds
+            else:
+                odds_available = False
+                total_odds = None
+        
+        # Вывод
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Количество событий", len(selected_list))
+        with col2:
+            st.metric("Общая вероятность", f"{total_prob:.1%}")
+        with col3:
+            if odds_available and total_odds:
+                st.metric("Общий коэффициент", f"{total_odds:.2f}")
+            else:
+                st.metric("Общий коэффициент", "— (нет всех коэффициентов)")
+        
+        # Оценка риска
+        risk_level = "Низкий" if total_prob > 0.5 else "Средний" if total_prob > 0.25 else "Высокий"
+        st.info(f"**Уровень риска:** {risk_level} (вероятность прохода {total_prob:.1%})")
+        
+        # Список выбранных матчей
+        st.write("**Выбранные матчи:**")
+        for m in selected_list:
+            max_prob = max(m['Победа хозяев'], m['Ничья'], m['Победа гостей'])
+            if max_prob == m['Победа хозяев']:
+                outcome = f"Победа {m['Хозяева']}"
+            elif max_prob == m['Ничья']:
+                outcome = "Ничья"
+            else:
+                outcome = f"Победа {m['Гости']}"
+            st.write(f"- {m['Хозяева']} vs {m['Гости']} → {outcome} ({max_prob:.0%})")
+        
+        # Кнопка для очистки комбинации
+        if st.button("🗑️ Очистить комбинацию"):
+            st.session_state.selected_matches = {}
+            st.rerun()
+    else:
+        st.info("Выберите матчи чекбоксами «➕ В комбинацию» под карточками, чтобы собрать комбинацию.")
+
+    # ---- График (опционально) ----
     if st.checkbox("Показать график сравнения вероятностей"):
         plot_df = df.copy()
         plot_df['match'] = plot_df['Хозяева'] + " vs " + plot_df['Гости']
@@ -616,4 +694,5 @@ if st.session_state.data_loaded:
     - ⭐ — валуйная ставка (наша вероятность выше букмекерской). Чем больше звёзд, тем лучше.
     - Если звёзд нет, но есть рекомендация — это самый вероятный исход по модели.
     - Если коэффициенты не загружены, появляются компактные поля для ручного ввода. После ввода валуйность пересчитывается автоматически.
+    - 🧩 Выбирайте матжи в комбинацию, чтобы оценить общий риск и потенциальный выигрыш.
     """)
