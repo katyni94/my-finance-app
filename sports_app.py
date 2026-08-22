@@ -412,7 +412,6 @@ with st.sidebar:
         """)
 
 # =================== ВКЛАДКИ ТУРНИРОВ + ЛУЧШИЕ МАТЧИ ===================
-# Создаём список вкладок: сначала лиги, затем "⭐ Лучшие матчи"
 league_names = list(FLAGS.keys())
 tab_names = league_names + ["⭐ Лучшие матчи"]
 tabs = st.tabs(tab_names)
@@ -614,7 +613,6 @@ for i, league_name in enumerate(league_names):
         if show_only_value:
             results = [r for r in results if r['is_value']]
         
-        # ---- Применяем фильтр по дате и сортировку, если включено ----
         if st.session_state.show_best:
             target_date = st.session_state.filter_date
             filtered_results = []
@@ -678,7 +676,8 @@ for i, league_name in enumerate(league_names):
                                 st.markdown(f"**Рекомендация:** {row['Рекомендация']}")
                                 
                                 is_selected = row['id'] in st.session_state.selected_matches
-                                if st.checkbox("➕ В комбинацию", value=is_selected, key=f"sel_{row['id']}"):
+                                # УНИКАЛЬНЫЙ КЛЮЧ: добавляем префикс лиги
+                                if st.checkbox("➕ В комбинацию", value=is_selected, key=f"sel_{league_name}_{row['id']}"):
                                     if row['id'] not in st.session_state.selected_matches:
                                         st.session_state.selected_matches[row['id']] = row
                                 else:
@@ -746,12 +745,10 @@ with tabs[-1]:
     st.header("⭐ Лучшие матчи по валуйности")
     st.caption("Здесь собраны все матчи из всех лиг, отсортированные по убыванию валуйности (звёзд).")
     
-    # Убедимся, что все лиги загружены
     for league_name in FLAGS.keys():
         if league_name not in st.session_state.league_cache:
             load_league_data(league_name)
     
-    # Собираем все матчи из всех лиг
     all_results = []
     for league_name in FLAGS.keys():
         league_data = st.session_state.league_cache.get(league_name, None)
@@ -941,7 +938,6 @@ with tabs[-1]:
                 "away_key": f"odds_a_{home}_{away}"
             })
     
-    # ---- Фильтрация и сортировка ----
     if show_only_value:
         all_results = [r for r in all_results if r['is_value']]
     
@@ -957,7 +953,6 @@ with tabs[-1]:
                 pass
         all_results = filtered
     
-    # Сортируем по убыванию value (звёздности)
     all_results.sort(key=lambda x: x.get('value', 0), reverse=True)
     
     if not all_results:
@@ -966,7 +961,6 @@ with tabs[-1]:
         st.success(f"✅ Найдено {len(all_results)} лучших матчей")
         df_all = pd.DataFrame(all_results)
         
-        # Отображаем в компактных карточках (2 в строке)
         st.markdown("""
         <style>
             div[data-testid="stNumberInput"] input {
@@ -982,8 +976,6 @@ with tabs[-1]:
         """, unsafe_allow_html=True)
         
         num_cols = 2
-        # Группировка по дате не обязательна, можно просто вывести все карточки подряд
-        # Но для удобства оставим сортировку по дате внутри
         df_all['Дата'] = pd.to_datetime(df_all['Дата'])
         dates_sorted = sorted(df_all['Дата'].unique())
         
@@ -1008,7 +1000,8 @@ with tabs[-1]:
                                 st.markdown(f"**Рекомендация:** {row['Рекомендация']}")
                                 
                                 is_selected = row['id'] in st.session_state.selected_matches
-                                if st.checkbox("➕ В комбинацию", value=is_selected, key=f"sel_{row['id']}"):
+                                # УНИКАЛЬНЫЙ КЛЮЧ для вкладки "Лучшие матчи"
+                                if st.checkbox("➕ В комбинацию", value=is_selected, key=f"best_sel_{row['id']}"):
                                     if row['id'] not in st.session_state.selected_matches:
                                         st.session_state.selected_matches[row['id']] = row
                                 else:
@@ -1051,7 +1044,6 @@ with tabs[-1]:
                                         )
                                 st.markdown("---")
         
-        # График для лучших матчей
         if st.checkbox("Показать график сравнения вероятностей для лучших матчей", key="show_graph_best"):
             plot_df = df_all.copy()
             plot_df['match'] = plot_df['Хозяева'] + " vs " + plot_df['Гости']
