@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import re
 
-# =================== ОПРЕДЕЛЕНИЯ В САМОМ НАЧАЛЕ ===================
+# =================== ОПРЕДЕЛЕНИЯ ===================
 FLAGS = {
     "АПЛ (Англия)": "🇬🇧",
     "Ла Лига (Испания)": "🇪🇸",
@@ -66,24 +66,12 @@ if 'selected_matches' not in st.session_state:
     st.session_state.selected_matches = {}
 if 'selected_bookmaker' not in st.session_state:
     st.session_state.selected_bookmaker = "Лига Ставок"
-if 'current_league' not in st.session_state:
-    st.session_state.current_league = list(FLAGS.keys())[0]  # теперь FLAGS определена
 
-# ---- Ограничение запросов ----
-if 'last_request_time' not in st.session_state:
-    st.session_state.last_request_time = None
+# ---- Ограничение для TheOddsAPI (дневной лимит) ----
 if 'odds_request_count' not in st.session_state:
     st.session_state.odds_request_count = 0
 if 'odds_request_date' not in st.session_state:
     st.session_state.odds_request_date = datetime.now().date()
-
-def can_make_request(min_interval_seconds=30):
-    if st.session_state.last_request_time is None:
-        return True, 0
-    elapsed = (datetime.now() - st.session_state.last_request_time).total_seconds()
-    if elapsed >= min_interval_seconds:
-        return True, 0
-    return False, int(min_interval_seconds - elapsed)
 
 def can_request_odds(limit=500):
     today = datetime.now().date()
@@ -232,26 +220,21 @@ def fetch_odds_from_odds_api(api_key, sport='soccer', region='eu', market='h2h')
         st.warning(f"Ошибка загрузки коэффициентов: {e}")
         return {}
 
-# ---- Функция загрузки данных для выбранной лиги ----
+# ---- Функция загрузки данных для выбранной лиги (без искусственной задержки) ----
 def load_league_data(league_name):
     comp_id = COMP_IDS[league_name]
     league_slug = BETBETTER_LEAGUES.get(league_name)
     
     with st.spinner(f"Загружаем данные для {league_name}..."):
-        can_request, wait = can_make_request(30)
-        if not can_request:
-            st.warning(f"⏳ Подождите {wait} секунд перед следующим запросом.")
-            return
-        
         try:
             matches, team_stats = fetch_matches_and_standings(comp_id, football_key)
-            st.session_state.last_request_time = datetime.now()
         except Exception as e:
             if "429" in str(e):
-                st.error("⏳ Лимит запросов к Football-Data.org. Подождите 30 секунд.")
+                st.error("⏳ Лимит запросов к Football-Data.org. Подождите 30 секунд и обновите страницу.")
+                return
             else:
                 st.error(f"Ошибка загрузки матчей: {e}")
-            return
+                return
         
         if not matches:
             st.warning(f"Нет предстоящих матчей в {league_name}.")
@@ -294,12 +277,11 @@ with st.sidebar:
     
     st.divider()
     
-    # ---- БЛОК КОМБИНАЦИИ (в боковой панели) ----
+    # ---- БЛОК КОМБИНАЦИИ ----
     if st.session_state.selected_matches:
         st.header("🧩 Моя комбинация")
         selected_list = list(st.session_state.selected_matches.values())
         
-        # Расчёт общей вероятности и коэффициента
         total_prob = 1.0
         total_odds = 1.0
         odds_available = True
@@ -629,7 +611,6 @@ for league_name, tab in zip(FLAGS.keys(), tabs):
                                     st.caption("Кф: — / — / —")
                                 st.markdown(f"**Рекомендация:** {row['Рекомендация']}")
                                 
-                                # Чекбокс для добавления в комбинацию
                                 is_selected = row['id'] in st.session_state.selected_matches
                                 if st.checkbox("➕ В комбинацию", value=is_selected, key=f"sel_{row['id']}"):
                                     if row['id'] not in st.session_state.selected_matches:
@@ -638,7 +619,6 @@ for league_name, tab in zip(FLAGS.keys(), tabs):
                                     if row['id'] in st.session_state.selected_matches:
                                         del st.session_state.selected_matches[row['id']]
                                 
-                                # Ручной ввод коэффициентов
                                 if row['manual_input_needed']:
                                     st.markdown("---")
                                     st.caption("Введите коэф. (обновляется автоматически):")
