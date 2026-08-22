@@ -5,7 +5,26 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import re
 
-# ---- Аутентификация ----
+# =================== ОПРЕДЕЛЕНИЯ В САМОМ НАЧАЛЕ ===================
+FLAGS = {
+    "АПЛ (Англия)": "🇬🇧",
+    "Ла Лига (Испания)": "🇪🇸",
+    "Бундеслига (Германия)": "🇩🇪",
+    "Серия А (Италия)": "🇮🇹",
+    "Лига 1 (Франция)": "🇫🇷",
+    "Лига Чемпионов": "🏆"
+}
+
+COMP_IDS = {
+    "АПЛ (Англия)": 2021,
+    "Ла Лига (Испания)": 2014,
+    "Бундеслига (Германия)": 2002,
+    "Серия А (Италия)": 2019,
+    "Лига 1 (Франция)": 2015,
+    "Лига Чемпионов": 2001,
+}
+
+# =================== АУТЕНТИФИКАЦИЯ ===================
 def check_password():
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
@@ -40,7 +59,7 @@ if not check_password():
 
 st.title("⚽ Спортивный аналитик — прогнозы и комбинации")
 
-# ---- Инициализация состояния ----
+# =================== ИНИЦИАЛИЗАЦИЯ СОСТОЯНИЯ ===================
 if 'league_cache' not in st.session_state:
     st.session_state.league_cache = {}
 if 'selected_matches' not in st.session_state:
@@ -48,9 +67,7 @@ if 'selected_matches' not in st.session_state:
 if 'selected_bookmaker' not in st.session_state:
     st.session_state.selected_bookmaker = "Лига Ставок"
 if 'current_league' not in st.session_state:
-    st.session_state.current_league = list(FLAGS.keys())[0]  # первая лига по умолчанию
-if 'previous_league' not in st.session_state:
-    st.session_state.previous_league = None
+    st.session_state.current_league = list(FLAGS.keys())[0]  # теперь FLAGS определена
 
 # ---- Ограничение запросов ----
 if 'last_request_time' not in st.session_state:
@@ -107,24 +124,6 @@ def fetch_betbetter_predictions(league_slug, min_probability=0):
     except Exception as e:
         st.warning(f"Ошибка при запросе к Bet Better API: {e}")
         return []
-
-FLAGS = {
-    "АПЛ (Англия)": "🇬🇧",
-    "Ла Лига (Испания)": "🇪🇸",
-    "Бундеслига (Германия)": "🇩🇪",
-    "Серия А (Италия)": "🇮🇹",
-    "Лига 1 (Франция)": "🇫🇷",
-    "Лига Чемпионов": "🏆"
-}
-
-COMP_IDS = {
-    "АПЛ (Англия)": 2021,
-    "Ла Лига (Испания)": 2014,
-    "Бундеслига (Германия)": 2002,
-    "Серия А (Италия)": 2019,
-    "Лига 1 (Франция)": 2015,
-    "Лига Чемпионов": 2001,
-}
 
 def clean_team_name(name):
     name = re.sub(r'\s+FC$', '', name)
@@ -346,13 +345,11 @@ with st.sidebar:
                 with col_a:
                     st.write(f"{m['Хозяева']} vs {m['Гости']} → **{outcome}** ({max_prob:.0%})")
                 with col_b:
-                    # Кнопка удаления конкретного матча
                     if st.button("✖️", key=f"del_{m['id']}"):
                         if m['id'] in st.session_state.selected_matches:
                             del st.session_state.selected_matches[m['id']]
                             st.rerun()
         
-        # Общая кнопка очистки
         if st.button("🗑️ Очистить всё", key="clear_comb"):
             st.session_state.selected_matches = {}
             st.rerun()
@@ -382,11 +379,10 @@ with st.sidebar:
         - Оценка риска поможет принять решение.
         """)
 
-# ---- ОСНОВНАЯ ЧАСТЬ: вкладки турниров ----
-# Создаём вкладки для всех лиг
+# =================== ВКЛАДКИ ТУРНИРОВ ===================
 tabs = st.tabs(list(FLAGS.keys()))
 
-for i, (league_name, tab) in enumerate(zip(FLAGS.keys(), tabs)):
+for league_name, tab in zip(FLAGS.keys(), tabs):
     with tab:
         # Если данные для этой лиги ещё не загружены, загружаем
         if league_name not in st.session_state.league_cache:
@@ -679,8 +675,8 @@ for i, (league_name, tab) in enumerate(zip(FLAGS.keys(), tabs)):
                                         )
                                 st.markdown("---")
         
-        # График (опционально) для каждой вкладки
-        if st.checkbox("Показать график сравнения вероятностей"):
+        # График с уникальным ключом
+        if st.checkbox("Показать график сравнения вероятностей", key=f"show_graph_{league_name}"):
             plot_df = df.copy()
             plot_df['match'] = plot_df['Хозяева'] + " vs " + plot_df['Гости']
             fig = go.Figure()
