@@ -256,7 +256,7 @@ with st.sidebar:
         
         **📈 Коэффициенты:**
         - Загружаются через TheOddsAPI (если есть ключ и лимит).
-        - Если коэффициенты не загрузились, появляются поля для ручного ввода.
+        - Если коэффициенты не загрузились, появляются компактные поля для ручного ввода.
         - При изменении любого поля валуйность пересчитывается автоматически.
         
         **🎯 Рекомендация:**
@@ -265,7 +265,6 @@ with st.sidebar:
 
 # ---- Кнопка загрузки данных ----
 if st.button("🚀 Анализировать"):
-    # Проверяем лимит запросов к Football-Data.org
     can_request, wait_seconds = can_make_request(30)
     if not can_request:
         st.warning(f"⏳ Подождите {wait_seconds} секунд перед следующим запросом.")
@@ -277,7 +276,6 @@ if st.button("🚀 Анализировать"):
             st.session_state.last_request_time = datetime.now()
             st.session_state.matches_data = matches
             st.session_state.team_stats = team_stats
-            st.session_state.data_loaded = True
         except Exception as e:
             if "429" in str(e):
                 import re
@@ -294,7 +292,6 @@ if st.button("🚀 Анализировать"):
         st.info("Нет предстоящих матчей.")
         st.stop()
     
-    # Загружаем ИИ-прогнозы от Bet Better
     betbetter_picks = []
     if league_slug:
         betbetter_picks = fetch_betbetter_predictions(league_slug)
@@ -306,7 +303,6 @@ if st.button("🚀 Анализировать"):
         st.info("Для этой лиги нет ИИ-прогнозов. Использую статистическую модель.")
     st.session_state.betbetter_picks = betbetter_picks
     
-    # Загружаем коэффициенты (если есть ключ)
     odds_data = {}
     if odds_key:
         odds_data = fetch_odds_from_odds_api(odds_key)
@@ -317,9 +313,8 @@ if st.button("🚀 Анализировать"):
             st.warning("⚠️ Не удалось загрузить коэффициенты. Будут доступны поля для ручного ввода.")
     st.session_state.odds_data = odds_data
     
-    # Устанавливаем флаг, что данные загружены
     st.session_state.data_loaded = True
-    st.rerun()  # Перезапускаем, чтобы отобразить данные
+    st.rerun()
 
 # ---- Отображение данных, если они загружены ----
 if st.session_state.data_loaded:
@@ -328,7 +323,6 @@ if st.session_state.data_loaded:
     odds_data = st.session_state.odds_data
     betbetter_picks = st.session_state.betbetter_picks
     
-    # Строим индекс по матчам для быстрого поиска прогноза
     betbetter_map = {}
     for pick in betbetter_picks or []:
         game = pick.get('game', '')
@@ -359,7 +353,6 @@ if st.session_state.data_loaded:
                     ai_pick = pick
                     break
 
-        # ---- Если есть ИИ-прогноз - используем его ----
         if ai_pick:
             selection = ai_pick.get('selection', '')
             prob_pct = ai_pick.get('modelProbabilityPct', 50)
@@ -388,7 +381,6 @@ if st.session_state.data_loaded:
             if verdict:
                 source += f": {verdict}"
         else:
-            # ---- Иначе используем статистическую модель ----
             h = team_stats.get(home, {})
             a = team_stats.get(away, {})
             if not h or not a:
@@ -419,7 +411,7 @@ if st.session_state.data_loaded:
                 prob_away /= total
             source = "📊 Статистическая модель"
 
-        # ---- Коэффициенты (если загружены) ----
+        # ---- Коэффициенты ----
         home_odds = None
         away_odds = None
         draw_odds = None
@@ -442,42 +434,20 @@ if st.session_state.data_loaded:
                         bookmaker_name = val['bookmaker']
                         break
 
-        # ---- Если коэффициенты не загружены, показываем поля ввода ----
         if not (home_odds and away_odds and draw_odds):
             manual_input_needed = True
-            # Создаём уникальные ключи для сессии
+            # Сохраняем в сессию значения для полей ввода (если ещё нет)
             key_h = f"odds_h_{home}_{away}"
             key_d = f"odds_d_{home}_{away}"
             key_a = f"odds_a_{home}_{away}"
-            # Если в сессии ещё нет значений, инициализируем их None
             if key_h not in st.session_state:
-                st.session_state[key_h] = None
-                st.session_state[key_d] = None
-                st.session_state[key_a] = None
-            # Поля ввода (будут отображаться под карточкой, но мы их разместим в цикле)
-            # Для удобства мы сохраним введённые значения в переменные
-            home_odds_input = st.number_input(
-                f"Победа {home_clean}",
-                min_value=1.0, max_value=20.0, value=2.0, step=0.1,
-                key=key_h,
-                format="%.2f"
-            )
-            draw_odds_input = st.number_input(
-                "Ничья",
-                min_value=1.0, max_value=20.0, value=3.0, step=0.1,
-                key=key_d,
-                format="%.2f"
-            )
-            away_odds_input = st.number_input(
-                f"Победа {away_clean}",
-                min_value=1.0, max_value=20.0, value=2.0, step=0.1,
-                key=key_a,
-                format="%.2f"
-            )
-            # Используем введённые значения для расчёта
-            home_odds = home_odds_input
-            away_odds = away_odds_input
-            draw_odds = draw_odds_input
+                st.session_state[key_h] = 2.0
+                st.session_state[key_d] = 3.0
+                st.session_state[key_a] = 2.0
+            # Используем значения из сессии
+            home_odds = st.session_state[key_h]
+            away_odds = st.session_state[key_a]
+            draw_odds = st.session_state[key_d]
             bookmaker_name = "Ручной ввод"
 
         # ---- Поиск валуйной ставки ----
@@ -503,7 +473,6 @@ if st.session_state.data_loaded:
             stars = "⭐" * min(5, int(best_value * 20) + 1)
             recommendation = f"{stars} {best_bet}"
         else:
-            # Если нет валуйности, даём рекомендацию по самому вероятному исходу
             max_prob = max(prob_home, prob_draw, prob_away)
             if max_prob == prob_home:
                 rec_text = f"Рекомендуем {home_clean} (вероятность {prob_home:.0%})"
@@ -511,9 +480,8 @@ if st.session_state.data_loaded:
                 rec_text = f"Рекомендуем ничью (вероятность {prob_draw:.0%})"
             else:
                 rec_text = f"Рекомендуем {away_clean} (вероятность {prob_away:.0%})"
-            recommendation = f"📈 {rec_text}" + (" (без коэффициентов)" if manual_input_needed and not (home_odds and away_odds and draw_odds) else "")
+            recommendation = f"📈 {rec_text}"
 
-        # Сохраняем данные для отображения
         results.append({
             "Дата": match_date,
             "Хозяева": home_clean,
@@ -529,25 +497,25 @@ if st.session_state.data_loaded:
             "Источник прогноза": source,
             "value": best_value,
             "is_value": best_value > 0 and home_odds is not None and draw_odds is not None and away_odds is not None,
-            "manual_input_needed": manual_input_needed
+            "manual_input_needed": manual_input_needed,
+            "home_key": f"odds_h_{home}_{away}",
+            "draw_key": f"odds_d_{home}_{away}",
+            "away_key": f"odds_a_{home}_{away}"
         })
 
-    # ---- Фильтрация ----
     if show_only_value:
         results = [r for r in results if r['is_value']]
         if not results:
             st.info("Нет матчей с явными преимуществами по коэффициентам.")
             st.stop()
 
-           # ---- Вывод в компактных карточках ----
+    # ---- Вывод в компактных карточках ----
     st.success(f"✅ Найдено {len(results)} матчей")
     df = pd.DataFrame(results)
     df['Дата'] = pd.to_datetime(df['Дата'])
     dates = sorted(df['Дата'].unique())
 
-    num_cols = 2
-
-    # CSS для компактных полей
+    # CSS для уменьшения полей ввода
     st.markdown("""
     <style>
         div[data-testid="stNumberInput"] input {
@@ -562,6 +530,8 @@ if st.session_state.data_loaded:
     </style>
     """, unsafe_allow_html=True)
 
+    num_cols = 2
+
     for date in dates:
         st.subheader(f"📅 {date.strftime('%d %B %Y')}")
         day_matches = df[df['Дата'] == date].to_dict('records')
@@ -571,13 +541,6 @@ if st.session_state.data_loaded:
             for col_idx, col in enumerate(cols):
                 if i + col_idx < len(day_matches):
                     row = day_matches[i + col_idx]
-                    # Уникальный индекс для полей ввода
-                    match_key = f"{row['Хозяева']}_{row['Гости']}_{date}"
-                    # Создаём ключи для сессии
-                    key_h = f"odds_h_{match_key}"
-                    key_d = f"odds_d_{match_key}"
-                    key_a = f"odds_a_{match_key}"
-                    
                     with col:
                         with st.container():
                             st.markdown(f"{flag} **{row['Хозяева']}** vs **{row['Гости']}**")
@@ -594,40 +557,39 @@ if st.session_state.data_loaded:
                             if row['manual_input_needed']:
                                 st.markdown("---")
                                 st.caption("Введите коэф. (обновляется автоматически):")
-                                c1, c2, c3 = st.columns([1, 1, 1])
+                                c1, c2, c3 = st.columns(3)
                                 with c1:
                                     st.number_input(
                                         "🏠",
                                         min_value=1.0, max_value=20.0,
-                                        value=float(st.session_state.get(key_h, 2.0)),
-                                        step=0.1, key=key_h,
+                                        value=st.session_state[row['home_key']],
+                                        step=0.1,
+                                        key=row['home_key'],
                                         format="%.2f",
-                                        label_visibility="collapsed",
-                                        use_container_width=False
+                                        label_visibility="collapsed"
                                     )
                                 with c2:
                                     st.number_input(
                                         "🤝",
                                         min_value=1.0, max_value=20.0,
-                                        value=float(st.session_state.get(key_d, 3.0)),
-                                        step=0.1, key=key_d,
+                                        value=st.session_state[row['draw_key']],
+                                        step=0.1,
+                                        key=row['draw_key'],
                                         format="%.2f",
-                                        label_visibility="collapsed",
-                                        use_container_width=False
+                                        label_visibility="collapsed"
                                     )
                                 with c3:
                                     st.number_input(
                                         "🚀",
                                         min_value=1.0, max_value=20.0,
-                                        value=float(st.session_state.get(key_a, 2.0)),
-                                        step=0.1, key=key_a,
+                                        value=st.session_state[row['away_key']],
+                                        step=0.1,
+                                        key=row['away_key'],
                                         format="%.2f",
-                                        label_visibility="collapsed",
-                                        use_container_width=False
+                                        label_visibility="collapsed"
                                     )
                             st.markdown("---")
 
-    # ---- График (опционально) ----
     if st.checkbox("Показать график сравнения вероятностей"):
         plot_df = df.copy()
         plot_df['match'] = plot_df['Хозяева'] + " vs " + plot_df['Гости']
@@ -653,5 +615,5 @@ if st.session_state.data_loaded:
     - Проценты показывают вероятность каждого исхода по мнению модели.
     - ⭐ — валуйная ставка (наша вероятность выше букмекерской). Чем больше звёзд, тем лучше.
     - Если звёзд нет, но есть рекомендация — это самый вероятный исход по модели.
-    - Если коэффициенты не загружены, появится поле для ручного ввода. После ввода валуйность пересчитается автоматически.
+    - Если коэффициенты не загружены, появляются компактные поля для ручного ввода. После ввода валуйность пересчитывается автоматически.
     """)
