@@ -550,20 +550,12 @@ if st.button("🚀 Анализировать"):
                             bookmaker_name = val['bookmaker']
                             break
 
-            # Если коэффициенты не загружены, предлагаем ручной ввод с улучшенным оформлением
+                       # Если коэффициенты не загружены, даём пояснение
             if not (home_odds and away_odds and draw_odds):
-                st.markdown("---")
-                st.markdown(f"**🎯 Введите коэффициенты для матча:**")
-                st.markdown(f"**{home_clean}** vs **{away_clean}**")
-                st.caption("Если коэффициенты не загружены автоматически, введите их из вашей БК. Если оставить как есть — сравнение с букмекером не будет выполнено.")
-                col_h, col_d, col_a = st.columns(3)
-                with col_h:
-                    home_odds = st.number_input(f"Победа {home_clean}", min_value=1.0, max_value=20.0, value=2.0, step=0.1, key=f"h_{home}_{away}")
-                with col_d:
-                    draw_odds = st.number_input("Ничья", min_value=1.0, max_value=20.0, value=3.0, step=0.1, key=f"d_{home}_{away}")
-                with col_a:
-                    away_odds = st.number_input(f"Победа {away_clean}", min_value=1.0, max_value=20.0, value=2.0, step=0.1, key=f"a_{home}_{away}")
-                bookmaker_name = "Ручной ввод"
+                st.caption("⚠️ Коэффициенты не загружены (нет в API). Для ручного ввода переключитесь на режим «Ручной ввод».")
+                # Оставляем переменные как None, чтобы не было ошибок
+                home_odds = away_odds = draw_odds = None
+                bookmaker_name = "Неизвестная БК"
 
             # ---- Поиск валуйной ставки ----
             def value_found(prob, odds):
