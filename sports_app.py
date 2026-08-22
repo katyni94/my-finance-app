@@ -185,7 +185,7 @@ if st.button("🚀 Найти лучшие ставки"):
             return ''
         
         st.dataframe(
-            df.style.applymap(color_prob, subset=['Победа хозяев', 'Ничья', 'Победа гостей']),
+            df.style.map(color_prob, subset=['Победа хозяев', 'Ничья', 'Победа гостей']),
             use_container_width=True,
             hide_index=True
         )
