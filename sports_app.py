@@ -70,11 +70,10 @@ if 'filter_date' not in st.session_state:
     st.session_state.filter_date = datetime.now().date()
 if 'show_best' not in st.session_state:
     st.session_state.show_best = False
-# Единое хранилище коэффициентов
 if 'odds_data' not in st.session_state:
     st.session_state.odds_data = {}
 
-# ---- Ограничение для TheOddsAPI (дневной лимит) ----
+# ---- Ограничение для TheOddsAPI ----
 if 'odds_request_count' not in st.session_state:
     st.session_state.odds_request_count = 0
 if 'odds_request_date' not in st.session_state:
@@ -90,13 +89,11 @@ def can_request_odds(limit=500):
     return True, st.session_state.odds_request_count, limit
 
 def update_odds(match_id, key, value):
-    """Обновляет значение коэффициента в едином хранилище"""
     if match_id not in st.session_state.odds_data:
         st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
     st.session_state.odds_data[match_id][key] = value
 
 def get_odds(match_id, key):
-    """Возвращает значение коэффициента из хранилища"""
     if match_id not in st.session_state.odds_data:
         st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
     return st.session_state.odds_data[match_id][key]
@@ -239,28 +236,24 @@ def fetch_odds_from_odds_api(api_key, sport='soccer', region='eu', market='h2h')
         st.warning(f"Ошибка загрузки коэффициентов: {e}")
         return {}
 
-# ---- Функция загрузки данных для выбранной лиги ----
+# ---- Функция загрузки данных для лиги ----
 def load_league_data(league_name, force=False):
     if force and league_name in st.session_state.league_cache:
         del st.session_state.league_cache[league_name]
-    
     if league_name in st.session_state.league_cache:
         return
-    
     comp_id = COMP_IDS[league_name]
     league_slug = BETBETTER_LEAGUES.get(league_name)
-    
     with st.spinner(f"Загружаем данные для {league_name}..."):
         try:
             matches, team_stats = fetch_matches_and_standings(comp_id, football_key)
         except Exception as e:
             if "429" in str(e):
-                st.error("⏳ Лимит запросов к Football-Data.org. Подождите 30 секунд и обновите страницу.")
+                st.error("⏳ Лимит запросов к Football-Data.org. Подождите 30 секунд.")
                 return
             else:
                 st.error(f"Ошибка загрузки матчей: {e}")
                 return
-        
         if not matches:
             st.warning(f"Нет предстоящих матчей в {league_name}.")
             st.session_state.league_cache[league_name] = {
@@ -270,15 +263,12 @@ def load_league_data(league_name, force=False):
                 'odds_data': {}
             }
             return
-        
         betbetter_picks = []
         if league_slug:
             betbetter_picks = fetch_betbetter_predictions(league_slug)
-        
         odds_data = {}
         if odds_key:
             odds_data = fetch_odds_from_odds_api(odds_key)
-        
         st.session_state.league_cache[league_name] = {
             'matches': matches,
             'team_stats': team_stats,
@@ -293,7 +283,6 @@ def refresh_current_league(league_name):
 # ---- Боковая панель ----
 with st.sidebar:
     st.header("⚙️ Настройки")
-    
     bookmaker = st.selectbox(
         "Букмекерская контора (для ручного ввода)",
         ["Лига Ставок", "Winline", "BetBoom", "1xСтавка", "Марафон", "Другой"],
@@ -301,30 +290,15 @@ with st.sidebar:
         key="bookmaker_select"
     )
     st.session_state.selected_bookmaker = bookmaker
-    
     show_only_value = st.checkbox("Показать только матчи с явными преимуществами", value=False)
-    
     st.divider()
-    
-    # ---- ОБНОВЛЕНИЕ ДАННЫХ ----
-    refresh_league = st.selectbox(
-        "Выберите лигу для обновления",
-        list(FLAGS.keys()),
-        key="refresh_league_select"
-    )
+    refresh_league = st.selectbox("Выберите лигу для обновления", list(FLAGS.keys()), key="refresh_league_select")
     if st.button("🔄 Обновить данные для выбранной лиги"):
         refresh_current_league(refresh_league)
         st.success(f"Данные для {refresh_league} обновлены!")
-    
     st.divider()
-    
-    # ---- ФИЛЬТР ПО ДАТЕ ----
     st.header("🔍 Фильтр по дате")
-    filter_date = st.date_input(
-        "Выберите дату",
-        value=st.session_state.filter_date,
-        key="date_filter"
-    )
+    filter_date = st.date_input("Выберите дату", value=st.session_state.filter_date, key="date_filter")
     if st.button("📊 Показать лучшие позиции за выбранную дату"):
         st.session_state.filter_date = filter_date
         st.session_state.show_best = True
@@ -332,14 +306,10 @@ with st.sidebar:
     if st.button("🔄 Сбросить фильтр"):
         st.session_state.show_best = False
         st.rerun()
-    
     st.divider()
-    
-    # ---- БЛОК КОМБИНАЦИИ ----
     if st.session_state.selected_matches:
         st.header("🧩 Моя комбинация")
         selected_list = list(st.session_state.selected_matches.values())
-        
         total_prob = 1.0
         total_odds = 1.0
         odds_available = True
@@ -357,21 +327,17 @@ with st.sidebar:
             else:
                 odds_available = False
                 total_odds = None
-        
         col1, col2 = st.columns(2)
         with col1:
             st.metric("Событий", len(selected_list))
         with col2:
             st.metric("Общая вероятность", f"{total_prob:.1%}")
-        
         if odds_available and total_odds:
             st.metric("Общий коэффициент", f"{total_odds:.2f}")
         else:
             st.metric("Общий коэффициент", "— (нет всех кф)")
-        
         risk_level = "Низкий" if total_prob > 0.5 else "Средний" if total_prob > 0.25 else "Высокий"
         st.info(f"**Риск:** {risk_level} (вероятность {total_prob:.1%})")
-        
         with st.expander("📋 Выбранные матчи"):
             for idx, m in enumerate(selected_list):
                 max_prob = max(m['Победа хозяев'], m['Ничья'], m['Победа гостей'])
@@ -389,62 +355,39 @@ with st.sidebar:
                         if m['id'] in st.session_state.selected_matches:
                             del st.session_state.selected_matches[m['id']]
                             st.rerun()
-        
         if st.button("🗑️ Очистить всё", key="clear_comb"):
             st.session_state.selected_matches = {}
             st.rerun()
     else:
         st.info("Выберите матчи чекбоксами «➕ В комбинацию» под карточками.")
-    
     with st.expander("ℹ️ Как это работает"):
         st.markdown(f"""
         **Букмекерская контора:** {st.session_state.selected_bookmaker}
-        
-        **🤖 ИИ-прогнозы от Bet Better:**
-        - Бесплатный сервис на основе машинного обучения.
-        - Доступен для топ-лиг (АПЛ, Ла Лига, Бундеслига, Серия А, Лига 1, Лига Чемпионов).
-        
-        **📊 Если ИИ-прогноз недоступен:**
-        - Используется статистическая модель (очки, разница голов, преимущество своего поля).
-        
-        **📈 Коэффициенты:**
-        - Загружаются через TheOddsAPI (если есть ключ и лимит).
-        - Если коэффициенты не загрузились, появляются компактные поля для ручного ввода.
-        - При изменении любого поля валуйность пересчитывается автоматически.
-        
-        **🧩 Комбинации:**
-        - Выбирайте матчи чекбоксом «➕ В комбинацию» под карточкой.
-        - Выбранные матчи сохраняются даже при смене лиги.
-        - Общая вероятность и коэффициент рассчитываются автоматически.
-        - Оценка риска поможет принять решение.
-        
-        **🔄 Обновление данных:**
-        - Нажмите кнопку «Обновить данные для выбранной лиги», чтобы загрузить свежие матчи и коэффициенты.
-        
-        **🔍 Фильтр по дате:**
-        - Выберите дату и нажмите «Показать лучшие позиции», чтобы увидеть самые выгодные ставки (с наибольшей валуйностью) за этот день.
-        - Ставки сортируются по убыванию количества звёзд.
+        **🤖 ИИ-прогнозы от Bet Better:** Бесплатный сервис на основе машинного обучения. Доступен для топ-лиг (АПЛ, Ла Лига, Бундеслига, Серия А, Лига 1, Лига Чемпионов).
+        **📊 Если ИИ-прогноз недоступен:** Используется статистическая модель (очки, разница голов, преимущество своего поля).
+        **📈 Коэффициенты:** Загружаются через TheOddsAPI (если есть ключ и лимит). Если не загрузились, появляются компактные поля для ручного ввода. При изменении любого поля валуйность пересчитывается автоматически.
+        **🧩 Комбинации:** Выбирайте матчи чекбоксом «➕ В комбинацию» под карточкой. Выбранные матчи сохраняются даже при смене лиги. Общая вероятность и коэффициент рассчитываются автоматически. Оценка риска поможет принять решение.
+        **🔄 Обновление данных:** Нажмите кнопку «Обновить данные для выбранной лиги», чтобы загрузить свежие матчи и коэффициенты.
+        **🔍 Фильтр по дате:** Выберите дату и нажмите «Показать лучшие позиции», чтобы увидеть самые выгодные ставки (с наибольшей валуйностью) за этот день. Ставки сортируются по убыванию количества звёзд.
         """)
 
-# =================== ВКЛАДКИ ТУРНИРОВ + ЛУЧШИЕ МАТЧИ ===================
+# =================== ВКЛАДКИ ===================
 league_names = list(FLAGS.keys())
 tab_names = league_names + ["⭐ Лучшие матчи"]
 tabs = st.tabs(tab_names)
 
-# --- Вкладки с лигами ---
+# --- Лиги ---
 for i, league_name in enumerate(league_names):
     with tabs[i]:
         if league_name not in st.session_state.league_cache:
             load_league_data(league_name)
-        
         league_data = st.session_state.league_cache.get(league_name, None)
         if not league_data or not league_data['matches']:
             st.info(f"Нет предстоящих матчей в {league_name}.")
             continue
-        
         matches = league_data['matches']
         team_stats = league_data['team_stats']
-        odds_data = league_data['odds_data']
+        odds_data_api = league_data['odds_data']
         betbetter_picks = league_data['betbetter_picks']
         flag = FLAGS.get(league_name, "⚽")
         
@@ -478,7 +421,6 @@ for i, league_name in enumerate(league_names):
                     if (home_clean in h and away_clean in a) or (home in h and away in a):
                         ai_pick = pick
                         break
-            
             if ai_pick:
                 selection = ai_pick.get('selection', '')
                 prob_pct = ai_pick.get('modelProbabilityPct', 50)
@@ -537,37 +479,47 @@ for i, league_name in enumerate(league_names):
                     prob_away /= total
                 source = "📊 Статистическая модель"
             
+            # Коэффициенты: сначала из хранилища, если есть, иначе из API
             home_odds = None
             away_odds = None
             draw_odds = None
             bookmaker_name = "Неизвестная БК"
             manual_input_needed = False
             
-            if odds_data:
-                key = (home, away)
-                if key in odds_data:
-                    home_odds = odds_data[key]['home_win']
-                    away_odds = odds_data[key]['away_win']
-                    draw_odds = odds_data[key]['draw']
-                    bookmaker_name = odds_data[key]['bookmaker']
-                else:
-                    for (h, a), val in odds_data.items():
-                        if clean_team_name(h) == home_clean and clean_team_name(a) == away_clean:
-                            home_odds = val['home_win']
-                            away_odds = val['away_win']
-                            draw_odds = val['draw']
-                            bookmaker_name = val['bookmaker']
-                            break
-            
-            if not (home_odds and away_odds and draw_odds):
-                manual_input_needed = True
-                # Инициализация коэффициентов из общего хранилища, если их нет
-                if match_id not in st.session_state.odds_data:
-                    st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
+            # Если в хранилище есть ручные коэффициенты для этого match_id
+            if match_id in st.session_state.odds_data:
                 home_odds = st.session_state.odds_data[match_id]['h']
                 away_odds = st.session_state.odds_data[match_id]['a']
                 draw_odds = st.session_state.odds_data[match_id]['d']
+                manual_input_needed = False  # не показываем поля, т.к. они уже есть
                 bookmaker_name = st.session_state.selected_bookmaker
+            else:
+                # Пытаемся взять из API
+                if odds_data_api:
+                    key = (home, away)
+                    if key in odds_data_api:
+                        home_odds = odds_data_api[key]['home_win']
+                        away_odds = odds_data_api[key]['away_win']
+                        draw_odds = odds_data_api[key]['draw']
+                        bookmaker_name = odds_data_api[key]['bookmaker']
+                    else:
+                        for (h, a), val in odds_data_api.items():
+                            if clean_team_name(h) == home_clean and clean_team_name(a) == away_clean:
+                                home_odds = val['home_win']
+                                away_odds = val['away_win']
+                                draw_odds = val['draw']
+                                bookmaker_name = val['bookmaker']
+                                break
+                # Если нигде нет, то показываем поля для ввода
+                if not (home_odds and away_odds and draw_odds):
+                    manual_input_needed = True
+                    # инициализируем хранилище
+                    if match_id not in st.session_state.odds_data:
+                        st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
+                    home_odds = st.session_state.odds_data[match_id]['h']
+                    away_odds = st.session_state.odds_data[match_id]['a']
+                    draw_odds = st.session_state.odds_data[match_id]['d']
+                    bookmaker_name = st.session_state.selected_bookmaker
             
             best_bet = None
             best_value = 0
@@ -623,7 +575,6 @@ for i, league_name in enumerate(league_names):
         
         if show_only_value:
             results = [r for r in results if r['is_value']]
-        
         if st.session_state.show_best:
             target_date = st.session_state.filter_date
             filtered_results = []
@@ -636,39 +587,26 @@ for i, league_name in enumerate(league_names):
                     pass
             filtered_results.sort(key=lambda x: x.get('value', 0), reverse=True)
             results = filtered_results
-        
         if not results:
             if st.session_state.show_best:
                 st.info(f"Нет матчей с валуйными ставками на {st.session_state.filter_date.strftime('%d.%m.%Y')}.")
             else:
                 st.info("Нет матчей, соответствующих текущим фильтрам.")
             continue
-        
         st.success(f"✅ Найдено {len(results)} матчей")
         df = pd.DataFrame(results)
         df['Дата'] = pd.to_datetime(df['Дата'])
         dates = sorted(df['Дата'].unique())
-        
         st.markdown("""
         <style>
-            div[data-testid="stNumberInput"] input {
-                width: 60px !important;
-                font-size: 14px !important;
-                padding: 4px !important;
-            }
-            div[data-testid="column"] {
-                padding-left: 2px !important;
-                padding-right: 2px !important;
-            }
+            div[data-testid="stNumberInput"] input { width: 60px !important; font-size: 14px !important; padding: 4px !important; }
+            div[data-testid="column"] { padding-left: 2px !important; padding-right: 2px !important; }
         </style>
         """, unsafe_allow_html=True)
-        
         num_cols = 2
-        
         for date in dates:
             st.subheader(f"📅 {date.strftime('%d %B %Y')}")
             day_matches = df[df['Дата'] == date].to_dict('records')
-            
             for i in range(0, len(day_matches), num_cols):
                 cols = st.columns(num_cols)
                 for col_idx, col in enumerate(cols):
@@ -733,7 +671,6 @@ for i, league_name in enumerate(league_names):
                                             on_change=lambda mid=match_id, k='a': update_odds(mid, k, st.session_state[f"num_{mid}_a"])
                                         )
                                 st.markdown("---")
-        
         if st.checkbox("Показать график сравнения вероятностей", key=f"show_graph_{league_name}"):
             plot_df = df.copy()
             plot_df['match'] = plot_df['Хозяева'] + " vs " + plot_df['Гости']
@@ -746,19 +683,15 @@ for i, league_name in enumerate(league_names):
                     text=[f"{v:.0%}" for v in plot_df[outcome]],
                     textposition='inside'
                 ))
-            fig.update_layout(
-                barmode='group',
-                yaxis_title='Вероятность',
-                xaxis_tickangle=-45,
-                height=400
-            )
+            fig.update_layout(barmode='group', yaxis_title='Вероятность', xaxis_tickangle=-45, height=400)
             st.plotly_chart(fig, use_container_width=True)
 
-# --- Вкладка "⭐ Лучшие матчи" (последняя вкладка) ---
+# --- Вкладка "⭐ Лучшие матчи" (только для чтения) ---
 with tabs[-1]:
     st.header("⭐ Лучшие матчи по валуйности")
-    st.caption("Здесь собраны все матчи из всех лиг, отсортированные по убыванию валуйности (звёзд).")
+    st.caption("Здесь собраны все матчи из всех лиг, отсортированные по убыванию валуйности (звёзд). Коэффициенты берутся из введённых в лигах и автоматически обновляются.")
     
+    # Загружаем все лиги, если ещё нет
     for league_name in FLAGS.keys():
         if league_name not in st.session_state.league_cache:
             load_league_data(league_name)
@@ -768,12 +701,10 @@ with tabs[-1]:
         league_data = st.session_state.league_cache.get(league_name, None)
         if not league_data or not league_data['matches']:
             continue
-        
         matches = league_data['matches']
         team_stats = league_data['team_stats']
-        odds_data = league_data['odds_data']
+        odds_data_api = league_data['odds_data']
         betbetter_picks = league_data['betbetter_picks']
-        flag = FLAGS.get(league_name, "⚽")
         
         betbetter_map = {}
         for pick in betbetter_picks or []:
@@ -804,7 +735,6 @@ with tabs[-1]:
                     if (home_clean in h and away_clean in a) or (home in h and away in a):
                         ai_pick = pick
                         break
-            
             if ai_pick:
                 selection = ai_pick.get('selection', '')
                 prob_pct = ai_pick.get('modelProbabilityPct', 50)
@@ -863,37 +793,38 @@ with tabs[-1]:
                     prob_away /= total
                 source = "📊 Статистическая модель"
             
+            # Коэффициенты: всегда берём из общего хранилища (если есть), иначе из API
             home_odds = None
             away_odds = None
             draw_odds = None
             bookmaker_name = "Неизвестная БК"
-            manual_input_needed = False
-            
-            if odds_data:
-                key = (home, away)
-                if key in odds_data:
-                    home_odds = odds_data[key]['home_win']
-                    away_odds = odds_data[key]['away_win']
-                    draw_odds = odds_data[key]['draw']
-                    bookmaker_name = odds_data[key]['bookmaker']
-                else:
-                    for (h, a), val in odds_data.items():
-                        if clean_team_name(h) == home_clean and clean_team_name(a) == away_clean:
-                            home_odds = val['home_win']
-                            away_odds = val['away_win']
-                            draw_odds = val['draw']
-                            bookmaker_name = val['bookmaker']
-                            break
-            
-            if not (home_odds and away_odds and draw_odds):
-                manual_input_needed = True
-                # Инициализация коэффициентов из общего хранилища
-                if match_id not in st.session_state.odds_data:
-                    st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
+            if match_id in st.session_state.odds_data:
                 home_odds = st.session_state.odds_data[match_id]['h']
                 away_odds = st.session_state.odds_data[match_id]['a']
                 draw_odds = st.session_state.odds_data[match_id]['d']
                 bookmaker_name = st.session_state.selected_bookmaker
+            else:
+                if odds_data_api:
+                    key = (home, away)
+                    if key in odds_data_api:
+                        home_odds = odds_data_api[key]['home_win']
+                        away_odds = odds_data_api[key]['away_win']
+                        draw_odds = odds_data_api[key]['draw']
+                        bookmaker_name = odds_data_api[key]['bookmaker']
+                    else:
+                        for (h, a), val in odds_data_api.items():
+                            if clean_team_name(h) == home_clean and clean_team_name(a) == away_clean:
+                                home_odds = val['home_win']
+                                away_odds = val['away_win']
+                                draw_odds = val['draw']
+                                bookmaker_name = val['bookmaker']
+                                break
+                if not (home_odds and away_odds and draw_odds):
+                    # если совсем нет, ставим значения по умолчанию
+                    home_odds = 2.0
+                    away_odds = 2.0
+                    draw_odds = 3.0
+                    bookmaker_name = "Неизвестная БК"
             
             best_bet = None
             best_value = 0
@@ -930,7 +861,7 @@ with tabs[-1]:
                 "id": match_id,
                 "Дата": match_date,
                 "Тур": matchday,
-                "Лига": flag,
+                "Лига": league_name,  # текстовое название
                 "Хозяева": home_clean,
                 "Гости": away_clean,
                 "Победа хозяев": prob_home,
@@ -944,13 +875,11 @@ with tabs[-1]:
                 "Источник прогноза": source,
                 "value": best_value,
                 "is_value": best_value > 0 and home_odds is not None and draw_odds is not None and away_odds is not None,
-                "manual_input_needed": manual_input_needed,
                 "match_id": match_id
             })
     
     if show_only_value:
         all_results = [r for r in all_results if r['is_value']]
-    
     if st.session_state.show_best:
         target_date = st.session_state.filter_date
         filtered = []
@@ -962,7 +891,6 @@ with tabs[-1]:
             except:
                 pass
         all_results = filtered
-    
     all_results.sort(key=lambda x: x.get('value', 0), reverse=True)
     
     if not all_results:
@@ -970,25 +898,15 @@ with tabs[-1]:
     else:
         st.success(f"✅ Найдено {len(all_results)} лучших матчей")
         df_all = pd.DataFrame(all_results)
-        
         st.markdown("""
         <style>
-            div[data-testid="stNumberInput"] input {
-                width: 60px !important;
-                font-size: 14px !important;
-                padding: 4px !important;
-            }
-            div[data-testid="column"] {
-                padding-left: 2px !important;
-                padding-right: 2px !important;
-            }
+            div[data-testid="stNumberInput"] input { width: 60px !important; font-size: 14px !important; padding: 4px !important; }
+            div[data-testid="column"] { padding-left: 2px !important; padding-right: 2px !important; }
         </style>
         """, unsafe_allow_html=True)
-        
         num_cols = 2
         df_all['Дата'] = pd.to_datetime(df_all['Дата'])
         dates_sorted = sorted(df_all['Дата'].unique())
-        
         for date in dates_sorted:
             st.subheader(f"📅 {date.strftime('%d %B %Y')}")
             day_items = df_all[df_all['Дата'] == date].to_dict('records')
@@ -999,8 +917,8 @@ with tabs[-1]:
                         row = day_items[i + col_idx]
                         with col:
                             with st.container():
-                                st.markdown(f"{row['Лига']} **{row['Хозяева']}** vs **{row['Гости']}**")
-                                st.caption(f"Тур {row['Тур']} | {row['Источник прогноза']} | Букмекер: {row['Букмекер']}")
+                                st.markdown(f"{FLAGS.get(row['Лига'], '⚽')} **{row['Хозяева']}** vs **{row['Гости']}**")
+                                st.caption(f"{row['Лига']} | Тур {row['Тур']} | {row['Источник прогноза']} | Букмекер: {row['Букмекер']}")
                                 prob_str = f"🏠 {row['Победа хозяев']:.0%}  |  🤝 {row['Ничья']:.0%}  |  🚀 {row['Победа гостей']:.0%}"
                                 st.markdown(prob_str)
                                 if row['Кф хозяев'] and row['Кф ничья'] and row['Кф гости']:
@@ -1016,45 +934,7 @@ with tabs[-1]:
                                 else:
                                     if row['id'] in st.session_state.selected_matches:
                                         del st.session_state.selected_matches[row['id']]
-                                
-                                if row['manual_input_needed']:
-                                    st.markdown("---")
-                                    st.caption("Введите коэф. (обновляется автоматически):")
-                                    c1, c2, c3 = st.columns(3)
-                                    match_id = row['match_id']
-                                    with c1:
-                                        st.number_input(
-                                            "🏠",
-                                            min_value=1.0, max_value=20.0,
-                                            value=st.session_state.odds_data[match_id]['h'],
-                                            step=0.1,
-                                            key=f"best_num_{match_id}_h",
-                                            format="%.2f",
-                                            label_visibility="collapsed",
-                                            on_change=lambda mid=match_id, k='h': update_odds(mid, k, st.session_state[f"best_num_{mid}_h"])
-                                        )
-                                    with c2:
-                                        st.number_input(
-                                            "🤝",
-                                            min_value=1.0, max_value=20.0,
-                                            value=st.session_state.odds_data[match_id]['d'],
-                                            step=0.1,
-                                            key=f"best_num_{match_id}_d",
-                                            format="%.2f",
-                                            label_visibility="collapsed",
-                                            on_change=lambda mid=match_id, k='d': update_odds(mid, k, st.session_state[f"best_num_{mid}_d"])
-                                        )
-                                    with c3:
-                                        st.number_input(
-                                            "🚀",
-                                            min_value=1.0, max_value=20.0,
-                                            value=st.session_state.odds_data[match_id]['a'],
-                                            step=0.1,
-                                            key=f"best_num_{match_id}_a",
-                                            format="%.2f",
-                                            label_visibility="collapsed",
-                                            on_change=lambda mid=match_id, k='a': update_odds(mid, k, st.session_state[f"best_num_{mid}_a"])
-                                        )
+                                # Нет полей ввода!
                                 st.markdown("---")
         
         if st.checkbox("Показать график сравнения вероятностей для лучших матчей", key="show_graph_best"):
@@ -1069,10 +949,5 @@ with tabs[-1]:
                     text=[f"{v:.0%}" for v in plot_df[outcome]],
                     textposition='inside'
                 ))
-            fig.update_layout(
-                barmode='group',
-                yaxis_title='Вероятность',
-                xaxis_tickangle=-45,
-                height=400
-            )
+            fig.update_layout(barmode='group', yaxis_title='Вероятность', xaxis_tickangle=-45, height=400)
             st.plotly_chart(fig, use_container_width=True)
