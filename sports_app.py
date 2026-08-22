@@ -539,7 +539,7 @@ if st.session_state.data_loaded:
             st.info("Нет матчей с явными преимуществами по коэффициентам.")
             st.stop()
 
-         # ---- Вывод в компактных карточках ----
+           # ---- Вывод в компактных карточках ----
     st.success(f"✅ Найдено {len(results)} матчей")
     df = pd.DataFrame(results)
     df['Дата'] = pd.to_datetime(df['Дата'])
@@ -547,16 +547,14 @@ if st.session_state.data_loaded:
 
     num_cols = 2
 
-    # Немного CSS для уменьшения полей ввода
+    # CSS для компактных полей
     st.markdown("""
     <style>
-        /* Уменьшаем ширину числовых полей ввода */
         div[data-testid="stNumberInput"] input {
             width: 60px !important;
             font-size: 14px !important;
             padding: 4px !important;
         }
-        /* Уменьшаем отступы между колонками */
         div[data-testid="column"] {
             padding-left: 2px !important;
             padding-right: 2px !important;
@@ -573,6 +571,13 @@ if st.session_state.data_loaded:
             for col_idx, col in enumerate(cols):
                 if i + col_idx < len(day_matches):
                     row = day_matches[i + col_idx]
+                    # Уникальный индекс для полей ввода
+                    match_key = f"{row['Хозяева']}_{row['Гости']}_{date}"
+                    # Создаём ключи для сессии
+                    key_h = f"odds_h_{match_key}"
+                    key_d = f"odds_d_{match_key}"
+                    key_a = f"odds_a_{match_key}"
+                    
                     with col:
                         with st.container():
                             st.markdown(f"{flag} **{row['Хозяева']}** vs **{row['Гости']}**")
@@ -589,20 +594,12 @@ if st.session_state.data_loaded:
                             if row['manual_input_needed']:
                                 st.markdown("---")
                                 st.caption("Введите коэф. (обновляется автоматически):")
-                                # Три колонки для полей
                                 c1, c2, c3 = st.columns([1, 1, 1])
-                                key_h = f"odds_h_{row['Хозяева']}_{row['Гости']}"
-                                key_d = f"odds_d_{row['Хозяева']}_{row['Гости']}"
-                                key_a = f"odds_a_{row['Хозяева']}_{row['Гости']}"
-                                if key_h not in st.session_state:
-                                    st.session_state[key_h] = 2.0
-                                    st.session_state[key_d] = 3.0
-                                    st.session_state[key_a] = 2.0
                                 with c1:
                                     st.number_input(
                                         "🏠",
                                         min_value=1.0, max_value=20.0,
-                                        value=st.session_state[key_h],
+                                        value=float(st.session_state.get(key_h, 2.0)),
                                         step=0.1, key=key_h,
                                         format="%.2f",
                                         label_visibility="collapsed",
@@ -612,7 +609,7 @@ if st.session_state.data_loaded:
                                     st.number_input(
                                         "🤝",
                                         min_value=1.0, max_value=20.0,
-                                        value=st.session_state[key_d],
+                                        value=float(st.session_state.get(key_d, 3.0)),
                                         step=0.1, key=key_d,
                                         format="%.2f",
                                         label_visibility="collapsed",
@@ -622,7 +619,7 @@ if st.session_state.data_loaded:
                                     st.number_input(
                                         "🚀",
                                         min_value=1.0, max_value=20.0,
-                                        value=st.session_state[key_a],
+                                        value=float(st.session_state.get(key_a, 2.0)),
                                         step=0.1, key=key_a,
                                         format="%.2f",
                                         label_visibility="collapsed",
