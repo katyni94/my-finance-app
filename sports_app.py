@@ -262,7 +262,7 @@ def fetch_odds_from_odds_api(api_key, sport='soccer', region='eu', market='h2h')
         st.warning(f"Ошибка загрузки коэффициентов: {e}")
         return {}
 
-# ---- Новые функции для улучшенного алгоритма ----
+# ---- Новые функции для улучшенного алгоритма (исправленные) ----
 @st.cache_data(ttl=3600)
 def load_csv_data(league_code):
     if league_code is None:
@@ -277,11 +277,23 @@ def load_csv_data(league_code):
             response = requests.get(url, timeout=10)
             if response.status_code == 200:
                 df = pd.read_csv(StringIO(response.text))
+                # Проверяем обязательные колонки
                 if 'Date' in df.columns and 'HomeTeam' in df.columns and 'AwayTeam' in df.columns:
-                    df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
+                    # Пытаемся преобразовать дату в разных форматах
+                    for fmt in ('%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d', '%m/%d/%Y'):
+                        try:
+                            df['Date'] = pd.to_datetime(df['Date'], format=fmt, errors='coerce')
+                            break
+                        except:
+                            continue
+                    # Если не удалось, пробуем с dayfirst=True (для формата дд/мм/гггг)
+                    if df['Date'].isna().all():
+                        df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
+                    # Удаляем строки с некорректной датой
                     df = df.dropna(subset=['Date'])
-                    df = df.sort_values('Date')
-                    return df
+                    if not df.empty:
+                        df = df.sort_values('Date')
+                        return df
         except:
             continue
     return None
@@ -297,10 +309,15 @@ def find_team_name_mapping(api_name, csv_team_names):
     return None
 
 def get_team_form(csv_df, team_name, n_matches=5):
+    # Убедимся, что Date - datetime
+    if not pd.api.types.is_datetime64_any_dtype(csv_df['Date']):
+        csv_df['Date'] = pd.to_datetime(csv_df['Date'], errors='coerce')
+    csv_df = csv_df.dropna(subset=['Date'])
     today = datetime.now().date()
     df_past = csv_df[csv_df['Date'].dt.date < today]
     if df_past.empty:
         return 0, 0
+    # Проверяем наличие колонок с голами
     if 'HomeGoals' not in df_past.columns or 'AwayGoals' not in df_past.columns:
         if 'FTHG' in df_past.columns and 'FTAG' in df_past.columns:
             df_past = df_past.rename(columns={'FTHG': 'HomeGoals', 'FTAG': 'AwayGoals'})
@@ -319,6 +336,10 @@ def get_team_form(csv_df, team_name, n_matches=5):
     return last_n['Points'].sum(), last_n['GD'].sum()
 
 def get_h2h(csv_df, home_team, away_team, n_matches=3):
+    # Убедимся, что Date - datetime (хотя мы не используем .dt в этой функции, но для безопасности)
+    if not pd.api.types.is_datetime64_any_dtype(csv_df['Date']):
+        csv_df['Date'] = pd.to_datetime(csv_df['Date'], errors='coerce')
+    csv_df = csv_df.dropna(subset=['Date'])
     mask = ((csv_df['HomeTeam'] == home_team) & (csv_df['AwayTeam'] == away_team)) | \
            ((csv_df['HomeTeam'] == away_team) & (csv_df['AwayTeam'] == home_team))
     h2h_matches = csv_df[mask].copy()
@@ -372,7 +393,7 @@ def load_league_data(league_name, force=False):
                 st.error(f"Ошибка загрузки матчей: {e}")
                 return
         
-        # Загрузка CSV с приоритетом загруженного пользователем
+        # ---- Загрузка CSV ----
         csv_df = None
         if league_name in st.session_state.uploaded_csvs and st.session_state.uploaded_csvs[league_name] is not None:
             csv_df = st.session_state.uploaded_csvs[league_name]
@@ -387,12 +408,10 @@ def load_league_data(league_name, force=False):
             else:
                 st.info(f"Для {league_name} нет данных CSV, используется упрощённая модель.")
         
-        # Загружаем Bet Better прогнозы
         betbetter_picks = []
         if league_slug:
             betbetter_picks = fetch_betbetter_predictions(league_slug)
         
-        # Загружаем коэффициенты (если есть ключ)
         odds_data = {}
         if odds_key:
             odds_data = fetch_odds_from_odds_api(odds_key)
@@ -409,7 +428,7 @@ def refresh_current_league(league_name):
     load_league_data(league_name, force=True)
     st.rerun()
 
-# ---- Боковая панель ----
+# ---- Боковая панель (без изменений) ----
 with st.sidebar:
     st.header("⚙️ Настройки")
     bookmaker = st.selectbox(
@@ -452,14 +471,24 @@ with st.sidebar:
     if uploaded_file is not None:
         try:
             df = pd.read_csv(uploaded_file)
+            # Проверяем структуру
             if 'Date' in df.columns and 'HomeTeam' in df.columns and 'AwayTeam' in df.columns:
+                # Конвертируем дату
+                for fmt in ('%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d', '%m/%d/%Y'):
+                    try:
+                        df['Date'] = pd.to_datetime(df['Date'], format=fmt, errors='coerce')
+                        break
+                    except:
+                        continue
+                if df['Date'].isna().all():
+                    df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
+                df = df.dropna(subset=['Date'])
                 if 'FTHG' in df.columns and 'FTAG' in df.columns:
                     df = df.rename(columns={'FTHG': 'HomeGoals', 'FTAG': 'AwayGoals'})
                 elif 'HomeGoals' not in df.columns or 'AwayGoals' not in df.columns:
                     st.warning("⚠️ В файле нет колонок с голами (FTHG/FTAG или HomeGoals/AwayGoals). Форма команд будет рассчитываться без разницы голов.")
                 st.session_state.uploaded_csvs[csv_league_to_upload] = df
                 st.success(f"✅ Файл загружен для {csv_league_to_upload}! {len(df)} матчей.")
-                # Принудительно обновляем кэш этой лиги
                 load_league_data(csv_league_to_upload, force=True)
                 st.rerun()
             else:
@@ -552,20 +581,17 @@ for i, league_name in enumerate(league_names):
             st.info(f"Нет предстоящих матчей в {league_name}.")
             continue
         
-        # Принудительно берём CSV из uploaded_csvs, если он есть, и обновляем кэш
-        csv_df = league_data.get('csv_data', None)
-        if (csv_df is None or csv_df.empty) and league_name in st.session_state.uploaded_csvs and st.session_state.uploaded_csvs[league_name] is not None:
-            csv_df = st.session_state.uploaded_csvs[league_name]
-            # Обновляем кэш, чтобы в следующий раз было правильно
-            st.session_state.league_cache[league_name]['csv_data'] = csv_df
-            league_data['csv_data'] = csv_df  # обновляем локальную ссылку
-        
         matches = league_data['matches']
         team_stats = league_data['team_stats']
         odds_data_api = league_data['odds_data']
         betbetter_picks = league_data['betbetter_picks']
-        flag = FLAGS.get(league_name, "⚽")
+        csv_df = league_data.get('csv_data', None)
+        # Проверка, не появился ли CSV в uploaded_csvs после кэширования
+        if csv_df is None and league_name in st.session_state.uploaded_csvs and st.session_state.uploaded_csvs[league_name] is not None:
+            csv_df = st.session_state.uploaded_csvs[league_name]
+            league_data['csv_data'] = csv_df
         
+        flag = FLAGS.get(league_name, "⚽")
         csv_team_names = None
         if csv_df is not None and not csv_df.empty:
             csv_team_names = pd.concat([csv_df['HomeTeam'], csv_df['AwayTeam']]).unique()
@@ -671,11 +697,11 @@ for i, league_name in enumerate(league_names):
             prob_draw /= total
             prob_away /= total
             
-            # Определяем источник прогноза
-            if csv_df is not None and not csv_df.empty:
-                source = f"📊 Улучшенная модель (CSV: {len(csv_df)} матчей)"
-            else:
+            source = "📊 Улучшенная модель"
+            if csv_df is None or csv_df.empty:
                 source = "📊 Статистическая модель (без CSV)"
+            else:
+                source = f"📊 Улучшенная модель (CSV: {len(csv_df)} матчей)"
             
             # ---- Коэффициенты ----
             home_odds = None
@@ -898,18 +924,14 @@ with tabs[-1]:
         league_data = st.session_state.league_cache.get(league_name, None)
         if not league_data or not league_data['matches']:
             continue
-        
-        # Принудительно берём CSV из uploaded_csvs
-        csv_df = league_data.get('csv_data', None)
-        if (csv_df is None or csv_df.empty) and league_name in st.session_state.uploaded_csvs and st.session_state.uploaded_csvs[league_name] is not None:
-            csv_df = st.session_state.uploaded_csvs[league_name]
-            st.session_state.league_cache[league_name]['csv_data'] = csv_df
-            league_data['csv_data'] = csv_df
-        
         matches = league_data['matches']
         team_stats = league_data['team_stats']
         odds_data_api = league_data['odds_data']
         betbetter_picks = league_data['betbetter_picks']
+        csv_df = league_data.get('csv_data', None)
+        if csv_df is None and league_name in st.session_state.uploaded_csvs and st.session_state.uploaded_csvs[league_name] is not None:
+            csv_df = st.session_state.uploaded_csvs[league_name]
+            league_data['csv_data'] = csv_df
         csv_team_names = None
         if csv_df is not None and not csv_df.empty:
             csv_team_names = pd.concat([csv_df['HomeTeam'], csv_df['AwayTeam']]).unique()
@@ -997,10 +1019,11 @@ with tabs[-1]:
             prob_draw /= total
             prob_away /= total
             
-            if csv_df is not None and not csv_df.empty:
-                source = f"📊 Улучшенная модель (CSV: {len(csv_df)} матчей)"
-            else:
+            source = "📊 Улучшенная модель"
+            if csv_df is None or csv_df.empty:
                 source = "📊 Статистическая модель (без CSV)"
+            else:
+                source = f"📊 Улучшенная модель (CSV: {len(csv_df)} матчей)"
             
             home_odds = None
             away_odds = None
