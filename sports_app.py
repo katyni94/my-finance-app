@@ -41,18 +41,14 @@ if not check_password():
 st.title("⚽ Спортивный аналитик — прогнозы и комбинации")
 
 # ---- Инициализация состояния ----
-if 'data_loaded' not in st.session_state:
-    st.session_state.data_loaded = False
-if 'matches_data' not in st.session_state:
-    st.session_state.matches_data = None
-if 'team_stats' not in st.session_state:
-    st.session_state.team_stats = None
-if 'odds_data' not in st.session_state:
-    st.session_state.odds_data = None
-if 'betbetter_picks' not in st.session_state:
-    st.session_state.betbetter_picks = None
+if 'league_cache' not in st.session_state:
+    st.session_state.league_cache = {}  # {league_name: {'matches': ..., 'team_stats': ..., 'odds_data': ..., 'betbetter_picks': ...}}
 if 'selected_matches' not in st.session_state:
-    st.session_state.selected_matches = {}  # {match_id: match_data}
+    st.session_state.selected_matches = {}
+if 'selected_bookmaker' not in st.session_state:
+    st.session_state.selected_bookmaker = "Лига Ставок"
+if 'current_league' not in st.session_state:
+    st.session_state.current_league = None
 
 # ---- Ограничение запросов ----
 if 'last_request_time' not in st.session_state:
@@ -117,6 +113,15 @@ FLAGS = {
     "Серия А (Италия)": "🇮🇹",
     "Лига 1 (Франция)": "🇫🇷",
     "Лига Чемпионов": "🏆"
+}
+
+COMP_IDS = {
+    "АПЛ (Англия)": 2021,
+    "Ла Лига (Испания)": 2014,
+    "Бундеслига (Германия)": 2002,
+    "Серия А (Италия)": 2019,
+    "Лига 1 (Франция)": 2015,
+    "Лига Чемпионов": 2001,
 }
 
 def clean_team_name(name):
@@ -226,18 +231,111 @@ def fetch_odds_from_odds_api(api_key, sport='soccer', region='eu', market='h2h')
         st.warning(f"Ошибка загрузки коэффициентов: {e}")
         return {}
 
+# ---- Функция загрузки данных для выбранной лиги ----
+def load_league_data(league_name):
+    """Загружает данные для указанной лиги и сохраняет в кэш сессии."""
+    comp_id = COMP_IDS[league_name]
+    league_slug = BETBETTER_LEAGUES.get(league_name)
+    
+    with st.spinner(f"Загружаем данные для {league_name}..."):
+        # Проверяем лимит запросов
+        can_request, wait = can_make_request(30)
+        if not can_request:
+            st.warning(f"⏳ Подождите {wait} секунд перед следующим запросом.")
+            # Если не можем сделать запрос, оставляем старые данные или пустые
+            return
+        
+        try:
+            matches, team_stats = fetch_matches_and_standings(comp_id, football_key)
+            st.session_state.last_request_time = datetime.now()
+        except Exception as e:
+            if "429" in str(e):
+                st.error("⏳ Лимит запросов к Football-Data.org. Подождите 30 секунд.")
+            else:
+                st.error(f"Ошибка загрузки матчей: {e}")
+            return
+        
+        if not matches:
+            st.warning(f"Нет предстоящих матчей в {league_name}.")
+            # Сохраняем пустые данные, чтобы не запрашивать повторно
+            st.session_state.league_cache[league_name] = {
+                'matches': [],
+                'team_stats': {},
+                'betbetter_picks': [],
+                'odds_data': {}
+            }
+            return
+        
+        # Загружаем ИИ-прогнозы
+        betbetter_picks = []
+        if league_slug:
+            betbetter_picks = fetch_betbetter_predictions(league_slug)
+        
+        # Загружаем коэффициенты
+        odds_data = {}
+        if odds_key:
+            odds_data = fetch_odds_from_odds_api(odds_key)
+        
+        # Сохраняем в кэш
+        st.session_state.league_cache[league_name] = {
+            'matches': matches,
+            'team_stats': team_stats,
+            'betbetter_picks': betbetter_picks,
+            'odds_data': odds_data
+        }
+        
+        # Обновляем текущую лигу
+        st.session_state.current_league = league_name
+
 # ---- Боковая панель ----
 with st.sidebar:
     st.header("⚙️ Настройки")
-    comp_name = st.selectbox("Выберите турнир", list(FLAGS.keys()))
-    comp_id = {
-        "АПЛ (Англия)": 2021,
-        "Ла Лига (Испания)": 2014,
-        "Бундеслига (Германия)": 2002,
-        "Серия А (Италия)": 2019,
-        "Лига 1 (Франция)": 2015,
-        "Лига Чемпионов": 2001,
-    }[comp_name]
+    
+    # Выбор букмекерской конторы
+    bookmaker = st.selectbox(
+        "Букмекерская контора (для ручного ввода)",
+        ["Лига Ставок", "Winline", "BetBoom", "1xСтавка", "Марафон", "Другой"],
+        index=0,
+        key="bookmaker_select"
+    )
+    st.session_state.selected_bookmaker = bookmaker
+    
+    # Выбор лиги (автоматически загружает данные при изменении)
+    league_names = list(FLAGS.keys())
+    default_index = 0
+    if st.session_state.current_league and st.session_state.current_league in league_names:
+        default_index = league_names.index(st.session_state.current_league)
+    
+    comp_name = st.selectbox(
+        "Выберите турнир",
+        league_names,
+        index=default_index,
+        key="league_select"
+    )
+    
+    # Проверяем, изменилась ли лига
+    if comp_name != st.session_state.get('previous_league', None):
+        # Если данные для этой лиги ещё не загружены, загружаем
+        if comp_name not in st.session_state.league_cache:
+            load_league_data(comp_name)
+        else:
+            # Если данные уже есть, просто обновляем текущую лигу
+            st.session_state.current_league = comp_name
+        st.session_state.previous_league = comp_name
+    
+    # Получаем данные текущей лиги
+    league_data = st.session_state.league_cache.get(comp_name, None)
+    if league_data:
+        matches = league_data['matches']
+        team_stats = league_data['team_stats']
+        odds_data = league_data['odds_data']
+        betbetter_picks = league_data['betbetter_picks']
+    else:
+        matches = []
+        team_stats = {}
+        odds_data = {}
+        betbetter_picks = []
+    
     flag = FLAGS.get(comp_name, "⚽")
     league_slug = BETBETTER_LEAGUES.get(comp_name)
     if league_slug:
@@ -248,7 +346,11 @@ with st.sidebar:
     show_only_value = st.checkbox("Показать только матчи с явными преимуществами", value=False)
     
     with st.expander("ℹ️ Как это работает"):
-        st.markdown("""
+        st.markdown(f"""
+        **Букмекерская контора:** {st.session_state.selected_bookmaker}
+        - Выберите БК, откуда вы переписываете коэффициенты.
+        - Это поможет не путаться, если вы работаете с разными конторами.
+        
         **🤖 ИИ-прогнозы от Bet Better:**
         - Бесплатный сервис на основе машинного обучения.
         - Доступен для топ-лиг (АПЛ, Ла Лига, Бундеслига, Серия А, Лига 1, Лига Чемпионов).
@@ -268,66 +370,9 @@ with st.sidebar:
         - Оценка риска поможет принять решение.
         """)
 
-# ---- Кнопка загрузки данных ----
-if st.button("🚀 Анализировать"):
-    can_request, wait_seconds = can_make_request(30)
-    if not can_request:
-        st.warning(f"⏳ Подождите {wait_seconds} секунд перед следующим запросом.")
-        st.stop()
-    
-    with st.spinner("Загружаем данные и ИИ-прогнозы..."):
-        try:
-            matches, team_stats = fetch_matches_and_standings(comp_id, football_key)
-            st.session_state.last_request_time = datetime.now()
-            st.session_state.matches_data = matches
-            st.session_state.team_stats = team_stats
-        except Exception as e:
-            if "429" in str(e):
-                import re
-                match = re.search(r'Wait (\d+) seconds', str(e))
-                if match:
-                    st.error(f"⏳ Лимит запросов. Подождите {match.group(1)} секунд.")
-                else:
-                    st.error("⏳ Лимит запросов. Подождите 30 секунд.")
-            else:
-                st.error(f"Ошибка: {e}")
-            st.stop()
-    
-    if not matches:
-        st.info("Нет предстоящих матчей.")
-        st.stop()
-    
-    betbetter_picks = []
-    if league_slug:
-        betbetter_picks = fetch_betbetter_predictions(league_slug)
-        if betbetter_picks:
-            st.success(f"✅ Загружено {len(betbetter_picks)} ИИ-прогнозов от Bet Better")
-        else:
-            st.warning("⚠️ ИИ-прогнозы от Bet Better не загружены. Использую статистическую модель.")
-    else:
-        st.info("Для этой лиги нет ИИ-прогнозов. Использую статистическую модель.")
-    st.session_state.betbetter_picks = betbetter_picks
-    
-    odds_data = {}
-    if odds_key:
-        odds_data = fetch_odds_from_odds_api(odds_key)
-        if odds_data:
-            used = st.session_state.odds_request_count
-            st.success(f"✅ Загружены коэффициенты для {len(odds_data)} матчей (запросов: {used}/500)")
-        else:
-            st.warning("⚠️ Не удалось загрузить коэффициенты. Будут доступны поля для ручного ввода.")
-    st.session_state.odds_data = odds_data
-    
-    st.session_state.data_loaded = True
-    st.rerun()
-
-# ---- Отображение данных, если они загружены ----
-if st.session_state.data_loaded:
-    matches = st.session_state.matches_data
-    team_stats = st.session_state.team_stats
-    odds_data = st.session_state.odds_data
-    betbetter_picks = st.session_state.betbetter_picks
-    
+# ---- Обработка загруженных данных ----
+if league_data and matches:
+    # Строим индекс для Bet Better
     betbetter_map = {}
     for pick in betbetter_picks or []:
         game = pick.get('game', '')
@@ -452,7 +497,7 @@ if st.session_state.data_loaded:
             home_odds = st.session_state[key_h]
             away_odds = st.session_state[key_a]
             draw_odds = st.session_state[key_d]
-            bookmaker_name = "Ручной ввод"
+            bookmaker_name = st.session_state.selected_bookmaker
 
         # ---- Поиск валуйной ставки ----
         best_bet = None
@@ -512,6 +557,7 @@ if st.session_state.data_loaded:
         results = [r for r in results if r['is_value']]
         if not results:
             st.info("Нет матчей с явными преимуществами по коэффициентам.")
+            # Показываем пустой блок, но не останавливаем выполнение
             st.stop()
 
     # ---- Вывод в компактных карточках ----
@@ -615,11 +661,8 @@ if st.session_state.data_loaded:
         total_odds = 1.0
         odds_available = True
         for m in selected_list:
-            # Для комбинации используем самый вероятный исход (по модели)
-            # Можно дать пользователю выбор, но пока возьмём максимальную вероятность
             max_prob = max(m['Победа хозяев'], m['Ничья'], m['Победа гостей'])
             total_prob *= max_prob
-            # Берём коэффициент для этого исхода (если есть)
             if m['Кф хозяев'] and m['Кф ничья'] and m['Кф гости']:
                 if max_prob == m['Победа хозяев']:
                     odds = m['Кф хозяев']
@@ -694,5 +737,11 @@ if st.session_state.data_loaded:
     - ⭐ — валуйная ставка (наша вероятность выше букмекерской). Чем больше звёзд, тем лучше.
     - Если звёзд нет, но есть рекомендация — это самый вероятный исход по модели.
     - Если коэффициенты не загружены, появляются компактные поля для ручного ввода. После ввода валуйность пересчитывается автоматически.
-    - 🧩 Выбирайте матжи в комбинацию, чтобы оценить общий риск и потенциальный выигрыш.
+    - 🧩 Выбирайте матчи в комбинацию, чтобы оценить общий риск и потенциальный выигрыш.
+    - 🏷️ В карточках отображается букмекерская контора, которую вы выбрали в настройках (для ручного ввода).
     """)
+
+elif not matches and league_data is not None:
+    st.info("Нет предстоящих матчей в выбранном турнире.")
+else:
+    st.info("Выберите турнир и дождитесь загрузки данных.")
