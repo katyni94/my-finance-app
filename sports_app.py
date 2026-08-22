@@ -66,6 +66,10 @@ if 'selected_matches' not in st.session_state:
     st.session_state.selected_matches = {}
 if 'selected_bookmaker' not in st.session_state:
     st.session_state.selected_bookmaker = "Лига Ставок"
+if 'filter_date' not in st.session_state:
+    st.session_state.filter_date = datetime.now().date()
+if 'show_best' not in st.session_state:
+    st.session_state.show_best = False
 
 # ---- Ограничение для TheOddsAPI (дневной лимит) ----
 if 'odds_request_count' not in st.session_state:
@@ -222,7 +226,6 @@ def fetch_odds_from_odds_api(api_key, sport='soccer', region='eu', market='h2h')
 
 # ---- Функция загрузки данных для выбранной лиги ----
 def load_league_data(league_name, force=False):
-    """Загружает данные для указанной лиги. Если force=True, игнорирует кэш."""
     if force and league_name in st.session_state.league_cache:
         del st.session_state.league_cache[league_name]
     
@@ -268,9 +271,7 @@ def load_league_data(league_name, force=False):
             'odds_data': odds_data
         }
 
-# ---- Функция для обновления данных текущей лиги ----
 def refresh_current_league(league_name):
-    """Принудительно обновляет данные для указанной лиги."""
     load_league_data(league_name, force=True)
     st.rerun()
 
@@ -290,7 +291,7 @@ with st.sidebar:
     
     st.divider()
     
-    # ---- БЛОК ОБНОВЛЕНИЯ ДАННЫХ ----
+    # ---- ОБНОВЛЕНИЕ ДАННЫХ ----
     refresh_league = st.selectbox(
         "Выберите лигу для обновления",
         list(FLAGS.keys()),
@@ -299,6 +300,23 @@ with st.sidebar:
     if st.button("🔄 Обновить данные для выбранной лиги"):
         refresh_current_league(refresh_league)
         st.success(f"Данные для {refresh_league} обновлены!")
+    
+    st.divider()
+    
+    # ---- ФИЛЬТР ПО ДАТЕ И ЛУЧШИЕ ПОЗИЦИИ ----
+    st.header("🔍 Фильтр по дате")
+    filter_date = st.date_input(
+        "Выберите дату",
+        value=st.session_state.filter_date,
+        key="date_filter"
+    )
+    if st.button("📊 Показать лучшие позиции за выбранную дату"):
+        st.session_state.filter_date = filter_date
+        st.session_state.show_best = True
+        st.rerun()
+    if st.button("🔄 Сбросить фильтр"):
+        st.session_state.show_best = False
+        st.rerun()
     
     st.divider()
     
@@ -387,6 +405,10 @@ with st.sidebar:
         
         **🔄 Обновление данных:**
         - Нажмите кнопку «Обновить данные для выбранной лиги», чтобы загрузить свежие матчи и коэффициенты.
+        
+        **🔍 Фильтр по дате:**
+        - Выберите дату и нажмите «Показать лучшие позиции», чтобы увидеть самые выгодные ставки (с наибольшей валуйностью) за этот день.
+        - Ставки сортируются по убыванию количества звёзд.
         """)
 
 # =================== ВКЛАДКИ ТУРНИРОВ ===================
@@ -394,7 +416,6 @@ tabs = st.tabs(list(FLAGS.keys()))
 
 for league_name, tab in zip(FLAGS.keys(), tabs):
     with tab:
-        # Если данные для этой лиги ещё не загружены, загружаем
         if league_name not in st.session_state.league_cache:
             load_league_data(league_name)
         
@@ -409,7 +430,6 @@ for league_name, tab in zip(FLAGS.keys(), tabs):
         betbetter_picks = league_data['betbetter_picks']
         flag = FLAGS.get(league_name, "⚽")
         
-        # Построение индекса для Bet Better
         betbetter_map = {}
         for pick in betbetter_picks or []:
             game = pick.get('game', '')
@@ -427,9 +447,8 @@ for league_name, tab in zip(FLAGS.keys(), tabs):
             match_date = match['utcDate'][:10]
             home_clean = clean_team_name(home)
             away_clean = clean_team_name(away)
-            match_id = f"{home}_{away}_{match_date}"
+            match_id = f"{league_name}_{home}_{away}_{match_date}"
             
-            # Ищем ИИ-прогноз
             ai_pick = None
             if (home, away) in betbetter_map:
                 ai_pick = betbetter_map[(home, away)]
@@ -499,7 +518,6 @@ for league_name, tab in zip(FLAGS.keys(), tabs):
                     prob_away /= total
                 source = "📊 Статистическая модель"
             
-            # Коэффициенты
             home_odds = None
             away_odds = None
             draw_odds = None
@@ -536,7 +554,6 @@ for league_name, tab in zip(FLAGS.keys(), tabs):
                 draw_odds = st.session_state[key_d]
                 bookmaker_name = st.session_state.selected_bookmaker
             
-            # Поиск валуйной ставки
             best_bet = None
             best_value = 0
             if home_odds and prob_home > 0 and prob_home > 1/home_odds:
@@ -592,16 +609,35 @@ for league_name, tab in zip(FLAGS.keys(), tabs):
         
         if show_only_value:
             results = [r for r in results if r['is_value']]
-            if not results:
-                st.info("Нет матчей с явными преимуществами по коэффициентам.")
-                continue
+        
+        # ---- Применяем фильтр по дате и сортировку, если включено ----
+        if st.session_state.show_best:
+            target_date = st.session_state.filter_date
+            # Фильтруем по дате
+            filtered_results = []
+            for r in results:
+                try:
+                    r_date = datetime.strptime(r['Дата'], '%Y-%m-%d').date()
+                    if r_date == target_date:
+                        filtered_results.append(r)
+                except:
+                    pass
+            # Сортируем по значению (звёздности) по убыванию
+            filtered_results.sort(key=lambda x: x.get('value', 0), reverse=True)
+            results = filtered_results
+        
+        if not results:
+            if st.session_state.show_best:
+                st.info(f"Нет матчей с валуйными ставками на {st.session_state.filter_date.strftime('%d.%m.%Y')}.")
+            else:
+                st.info("Нет матчей, соответствующих текущим фильтрам.")
+            continue
         
         st.success(f"✅ Найдено {len(results)} матчей")
         df = pd.DataFrame(results)
         df['Дата'] = pd.to_datetime(df['Дата'])
         dates = sorted(df['Дата'].unique())
         
-        # CSS для уменьшения полей ввода
         st.markdown("""
         <style>
             div[data-testid="stNumberInput"] input {
@@ -683,7 +719,6 @@ for league_name, tab in zip(FLAGS.keys(), tabs):
                                         )
                                 st.markdown("---")
         
-        # График с уникальным ключом
         if st.checkbox("Показать график сравнения вероятностей", key=f"show_graph_{league_name}"):
             plot_df = df.copy()
             plot_df['match'] = plot_df['Хозяева'] + " vs " + plot_df['Гости']
