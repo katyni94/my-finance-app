@@ -7,10 +7,9 @@ st.set_page_config(page_title="Спортивный аналитик", layout="w
 st.title("⚽ Спортивный аналитик — прототип")
 
 # --- Ввод API-ключа ---
-api_key = st.text_input("Введите ваш API-ключ Football-Data.org", type="password")
+api_key = st.secrets.get("FOOTBALL_API_KEY")
 if not api_key:
-    st.warning("Получите ключ на football-data.org и введите его.")
-    st.stop()
+    api_key = st.text_input("Введите ваш API-ключ", type="6ae3050890b64e31927722642996172f")
 
 # --- Выбор турнира ---
 competition_id = st.selectbox(
