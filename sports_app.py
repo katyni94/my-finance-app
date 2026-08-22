@@ -83,8 +83,9 @@ if 'show_best' not in st.session_state:
     st.session_state.show_best = False
 if 'odds_data' not in st.session_state:
     st.session_state.odds_data = {}
-if 'uploaded_csv' not in st.session_state:
-    st.session_state.uploaded_csv = None  # здесь будет DataFrame загруженного CSV
+# Словарь для хранения загруженных CSV по лигам
+if 'uploaded_csvs' not in st.session_state:
+    st.session_state.uploaded_csvs = {}
 
 # ---- Ограничение для TheOddsAPI ----
 if 'odds_request_count' not in st.session_state:
@@ -333,7 +334,6 @@ def get_h2h(csv_df, home_team, away_team, n_matches=3):
     draws = 0
     wins_away = 0
     for _, row in h2h_matches.iterrows():
-        # Убедимся, что колонки есть
         if 'HomeGoals' not in row or 'AwayGoals' not in row:
             continue
         if row['HomeTeam'] == home_team:
@@ -377,25 +377,12 @@ def load_league_data(league_name, force=False):
                 st.error(f"Ошибка загрузки матчей: {e}")
                 return
         
-        # ---- Загрузка CSV (сначала проверяем загруженный пользователем файл) ----
+        # ---- Загрузка CSV (сначала проверяем загруженный пользователем файл для этой лиги) ----
         csv_df = None
-        # Проверяем, есть ли загруженный пользователем CSV
-        if st.session_state.uploaded_csv is not None and isinstance(st.session_state.uploaded_csv, pd.DataFrame):
-            # Проверяем, содержит ли он данные для этой лиги (по колонке Div, если есть)
-            # Если в файле есть колонка Div, можно отфильтровать по коду лиги, иначе используем весь файл
-            if 'Div' in st.session_state.uploaded_csv.columns and league_code is not None:
-                # Фильтруем по лиге
-                filtered = st.session_state.uploaded_csv[st.session_state.uploaded_csv['Div'] == league_code]
-                if not filtered.empty:
-                    csv_df = filtered
-                    st.info(f"📊 Используется загруженный CSV для {league_name} (фильтр по {league_code})")
-                else:
-                    # Если фильтр не дал результатов, используем весь файл (возможно, он уже содержит только нужную лигу)
-                    csv_df = st.session_state.uploaded_csv
-                    st.info(f"📊 Используется загруженный CSV (без фильтра) для {league_name}")
-            else:
-                csv_df = st.session_state.uploaded_csv
-                st.info(f"📊 Используется загруженный CSV для {league_name}")
+        # Проверяем, есть ли загруженный CSV для этой лиги в словаре
+        if league_name in st.session_state.uploaded_csvs and st.session_state.uploaded_csvs[league_name] is not None:
+            csv_df = st.session_state.uploaded_csvs[league_name]
+            st.info(f"📊 Используется загруженный CSV для {league_name}")
         else:
             # Если пользователь не загрузил файл, пробуем скачать автоматически
             if league_code:
@@ -457,13 +444,21 @@ with st.sidebar:
         st.rerun()
     
     st.divider()
-    # ---- ЗАГРУЗЧИК CSV ----
+    # ---- ЗАГРУЗЧИК CSV С ВЫБОРОМ ЛИГИ ----
     st.header("📁 Загрузить CSV")
-    st.caption("Если автоматическая загрузка не работает, скачайте CSV-файл с football-data.co.uk и загрузите его вручную.")
+    st.caption("Загрузите CSV-файл для выбранной лиги. Файлы хранятся отдельно для каждой лиги.")
+    
+    # Выбор лиги для загрузки
+    csv_league_to_upload = st.selectbox(
+        "Выберите лигу для загрузки CSV",
+        list(FLAGS.keys()),
+        key="csv_league_select"
+    )
+    
     uploaded_file = st.file_uploader(
-        "Выберите CSV-файл для текущей лиги",
+        "Выберите CSV-файл",
         type=["csv"],
-        key="csv_uploader"
+        key="csv_uploader_main"
     )
     if uploaded_file is not None:
         try:
@@ -472,21 +467,25 @@ with st.sidebar:
             if 'Date' in df.columns and 'HomeTeam' in df.columns and 'AwayTeam' in df.columns:
                 # Дополнительно проверяем наличие колонок с голами
                 if 'FTHG' in df.columns and 'FTAG' in df.columns:
-                    # переименуем для единообразия
                     df = df.rename(columns={'FTHG': 'HomeGoals', 'FTAG': 'AwayGoals'})
                 elif 'HomeGoals' not in df.columns or 'AwayGoals' not in df.columns:
-                    # Если нет колонок с голами, используем стандартные, но предупредим
                     st.warning("⚠️ В файле нет колонок с голами (FTHG/FTAG или HomeGoals/AwayGoals). Форма команд будет рассчитываться без разницы голов.")
-                st.session_state.uploaded_csv = df
-                st.success(f"✅ Файл загружен! {len(df)} матчей.")
-                # Принудительно обновляем кэш текущей лиги (если она выбрана)
-                if 'current_league' in st.session_state:
-                    load_league_data(st.session_state.current_league, force=True)
-                    st.rerun()
+                # Сохраняем в словарь под ключом выбранной лиги
+                st.session_state.uploaded_csvs[csv_league_to_upload] = df
+                st.success(f"✅ Файл загружен для {csv_league_to_upload}! {len(df)} матчей.")
+                # Принудительно обновляем кэш этой лиги
+                load_league_data(csv_league_to_upload, force=True)
+                st.rerun()
             else:
                 st.error("❌ Неверный формат CSV. Убедитесь, что есть колонки: Date, HomeTeam, AwayTeam (и желательно FTHG/FTAG).")
         except Exception as e:
             st.error(f"Ошибка чтения файла: {e}")
+    
+    # Показываем список загруженных файлов
+    if st.session_state.uploaded_csvs:
+        st.caption("📂 Загруженные файлы:")
+        for league, df in st.session_state.uploaded_csvs.items():
+            st.write(f"  - {league} ({len(df)} матчей)")
     
     st.divider()
     if st.session_state.selected_matches:
@@ -550,7 +549,7 @@ with st.sidebar:
         **📈 Коэффициенты:** Загружаются через TheOddsAPI (если есть ключ и лимит). Если не загрузились, появляются компактные поля для ручного ввода.
         **🧩 Комбинации:** Выбирайте матчи чекбоксом «➕ В комбинацию» под карточкой.
         **🔄 Обновление данных:** Нажмите кнопку «Обновить данные для выбранной лиги».
-        **📁 Загрузка CSV:** Скачайте CSV-файл с football-data.co.uk и загрузите его в приложение для улучшения прогнозов.
+        **📁 Загрузка CSV:** Скачайте CSV-файл с football-data.co.uk и загрузите его для конкретной лиги. Файлы хранятся отдельно для каждой лиги.
         """)
 
 # =================== ВКЛАДКИ ===================
