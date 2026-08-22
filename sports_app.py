@@ -350,7 +350,7 @@ def get_h2h(csv_df, home_team, away_team, n_matches=3):
         return 0.33, 0.34, 0.33
     return wins_home/total, draws/total, wins_away/total
 
-# ---- Функция загрузки данных для лиги (исправленная) ----
+# ---- Функция загрузки данных для лиги ----
 def load_league_data(league_name, force=False):
     if force and league_name in st.session_state.league_cache:
         del st.session_state.league_cache[league_name]
@@ -372,14 +372,12 @@ def load_league_data(league_name, force=False):
                 st.error(f"Ошибка загрузки матчей: {e}")
                 return
         
-        # ---- Загрузка CSV ----
+        # Загрузка CSV с приоритетом загруженного пользователем
         csv_df = None
-        # Проверяем, есть ли загруженный пользователем CSV для этой лиги
         if league_name in st.session_state.uploaded_csvs and st.session_state.uploaded_csvs[league_name] is not None:
             csv_df = st.session_state.uploaded_csvs[league_name]
             st.info(f"📊 Используется загруженный CSV для {league_name}")
         else:
-            # Пробуем скачать автоматически
             if league_code:
                 csv_df = load_csv_data(league_code)
                 if csv_df is not None and not csv_df.empty:
@@ -554,18 +552,19 @@ for i, league_name in enumerate(league_names):
             st.info(f"Нет предстоящих матчей в {league_name}.")
             continue
         
+        # Принудительно берём CSV из uploaded_csvs, если он есть, и обновляем кэш
+        csv_df = league_data.get('csv_data', None)
+        if (csv_df is None or csv_df.empty) and league_name in st.session_state.uploaded_csvs and st.session_state.uploaded_csvs[league_name] is not None:
+            csv_df = st.session_state.uploaded_csvs[league_name]
+            # Обновляем кэш, чтобы в следующий раз было правильно
+            st.session_state.league_cache[league_name]['csv_data'] = csv_df
+            league_data['csv_data'] = csv_df  # обновляем локальную ссылку
+        
         matches = league_data['matches']
         team_stats = league_data['team_stats']
         odds_data_api = league_data['odds_data']
         betbetter_picks = league_data['betbetter_picks']
-        csv_df = league_data.get('csv_data', None)
         flag = FLAGS.get(league_name, "⚽")
-        
-        # Дополнительная проверка: если csv_df None, но в uploaded_csvs есть файл, используем его
-        if csv_df is None and league_name in st.session_state.uploaded_csvs and st.session_state.uploaded_csvs[league_name] is not None:
-            csv_df = st.session_state.uploaded_csvs[league_name]
-            # Обновим кэш, чтобы в следующий раз было правильно
-            league_data['csv_data'] = csv_df
         
         csv_team_names = None
         if csv_df is not None and not csv_df.empty:
@@ -672,11 +671,11 @@ for i, league_name in enumerate(league_names):
             prob_draw /= total
             prob_away /= total
             
-            source = "📊 Улучшенная модель"
-            if csv_df is None or csv_df.empty:
-                source = "📊 Статистическая модель (без CSV)"
-            else:
+            # Определяем источник прогноза
+            if csv_df is not None and not csv_df.empty:
                 source = f"📊 Улучшенная модель (CSV: {len(csv_df)} матчей)"
+            else:
+                source = "📊 Статистическая модель (без CSV)"
             
             # ---- Коэффициенты ----
             home_odds = None
@@ -899,15 +898,18 @@ with tabs[-1]:
         league_data = st.session_state.league_cache.get(league_name, None)
         if not league_data or not league_data['matches']:
             continue
+        
+        # Принудительно берём CSV из uploaded_csvs
+        csv_df = league_data.get('csv_data', None)
+        if (csv_df is None or csv_df.empty) and league_name in st.session_state.uploaded_csvs and st.session_state.uploaded_csvs[league_name] is not None:
+            csv_df = st.session_state.uploaded_csvs[league_name]
+            st.session_state.league_cache[league_name]['csv_data'] = csv_df
+            league_data['csv_data'] = csv_df
+        
         matches = league_data['matches']
         team_stats = league_data['team_stats']
         odds_data_api = league_data['odds_data']
         betbetter_picks = league_data['betbetter_picks']
-        csv_df = league_data.get('csv_data', None)
-        # Дополнительная проверка
-        if csv_df is None and league_name in st.session_state.uploaded_csvs and st.session_state.uploaded_csvs[league_name] is not None:
-            csv_df = st.session_state.uploaded_csvs[league_name]
-            league_data['csv_data'] = csv_df
         csv_team_names = None
         if csv_df is not None and not csv_df.empty:
             csv_team_names = pd.concat([csv_df['HomeTeam'], csv_df['AwayTeam']]).unique()
@@ -995,11 +997,10 @@ with tabs[-1]:
             prob_draw /= total
             prob_away /= total
             
-            source = "📊 Улучшенная модель"
-            if csv_df is None or csv_df.empty:
-                source = "📊 Статистическая модель (без CSV)"
-            else:
+            if csv_df is not None and not csv_df.empty:
                 source = f"📊 Улучшенная модель (CSV: {len(csv_df)} матчей)"
+            else:
+                source = "📊 Статистическая модель (без CSV)"
             
             home_odds = None
             away_odds = None
