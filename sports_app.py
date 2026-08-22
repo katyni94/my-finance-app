@@ -4,9 +4,51 @@ import pandas as pd
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import re
+# ---- Аутентификация ----
+def check_password():
+    """Проверяет пароль и возвращает True, если пользователь авторизован."""
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
 
+    if st.session_state.authenticated:
+        return True
+
+    # Показываем форму входа
+    st.title("🔐 Вход в систему")
+    
+    # Если задан логин в secrets, проверяем и его (опционально)
+    username = st.text_input("Логин", placeholder="Введите логин (если требуется)")
+    password = st.text_input("Пароль", type="password", placeholder="Введите пароль")
+
+    if st.button("Войти"):
+        # Проверяем пароль (и логин, если он задан)
+        correct_username = st.secrets.get("APP_USERNAME", "")
+        correct_password = st.secrets.get("APP_PASSWORD", "")
+
+        if not correct_password:
+            st.error("Пароль не настроен в Secrets. Добавьте APP_PASSWORD.")
+            return False
+
+        if correct_username:
+            if username == correct_username and password == correct_password:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Неверный логин или пароль")
+        else:
+            if password == correct_password:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Неверный пароль")
+    return False
+    
 st.set_page_config(page_title="Спортивный аналитик", layout="wide")
 st.title("⚽ Спортивный аналитик — поиск валуйных ставок")
+
+# ---- Проверка аутентификации ----
+if not check_password():
+    st.stop()  # Прерываем выполнение, если не авторизован
 
 # ---- Словарь флагов для лиг ----
 FLAGS = {
