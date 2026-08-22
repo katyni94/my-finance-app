@@ -25,15 +25,6 @@ COMP_IDS = {
     "Лига Чемпионов": 2001,
 }
 
-LEAGUE_CSV_CODES = {
-    "АПЛ (Англия)": "E0",
-    "Ла Лига (Испания)": "SP1",
-    "Бундеслига (Германия)": "D1",
-    "Серия А (Италия)": "I1",
-    "Лига 1 (Франция)": "F1",
-    "Лига Чемпионов": None
-}
-
 # =================== АУТЕНТИФИКАЦИЯ ===================
 def check_password():
     if "authenticated" not in st.session_state:
@@ -262,40 +253,7 @@ def fetch_odds_from_odds_api(api_key, sport='soccer', region='eu', market='h2h')
         st.warning(f"Ошибка загрузки коэффициентов: {e}")
         return {}
 
-# ---- Новые функции для улучшенного алгоритма (исправленные) ----
-@st.cache_data(ttl=3600)
-def load_csv_data(league_code):
-    if league_code is None:
-        return None
-    urls = [
-        f"https://www.football-data.co.uk/new/{league_code}.csv",
-        f"https://www.football-data.co.uk/current/{league_code}.csv",
-        f"https://www.football-data.co.uk/archive/{league_code}.csv"
-    ]
-    for url in urls:
-        try:
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                df = pd.read_csv(StringIO(response.text))
-                # Проверяем обязательные колонки
-                if 'Date' in df.columns and 'HomeTeam' in df.columns and 'AwayTeam' in df.columns:
-                    # Пытаемся преобразовать дату в разных форматах
-                    for fmt in ('%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d', '%m/%d/%Y'):
-                        try:
-                            df['Date'] = pd.to_datetime(df['Date'], format=fmt, errors='coerce')
-                            break
-                        except:
-                            continue
-                    if df['Date'].isna().all():
-                        df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
-                    df = df.dropna(subset=['Date'])
-                    if not df.empty:
-                        df = df.sort_values('Date')
-                        return df
-        except:
-            continue
-    return None
-
+# ---- Новые функции для улучшенного алгоритма ----
 def find_team_name_mapping(api_name, csv_team_names):
     api_clean = clean_team_name(api_name).lower()
     for csv_name in csv_team_names:
@@ -366,7 +324,7 @@ def get_h2h(csv_df, home_team, away_team, n_matches=3):
         return 0.33, 0.34, 0.33
     return wins_home/total, draws/total, wins_away/total
 
-# ---- Функция загрузки данных для лиги ----
+# ---- Функция загрузки данных для лиги (упрощённая, без CSV) ----
 def load_league_data(league_name, force=False):
     if force and league_name in st.session_state.league_cache:
         del st.session_state.league_cache[league_name]
@@ -375,7 +333,6 @@ def load_league_data(league_name, force=False):
     
     comp_id = COMP_IDS[league_name]
     league_slug = BETBETTER_LEAGUES.get(league_name)
-    league_code = LEAGUE_CSV_CODES.get(league_name)
     
     with st.spinner(f"Загружаем данные для {league_name}..."):
         try:
@@ -388,21 +345,6 @@ def load_league_data(league_name, force=False):
                 st.error(f"Ошибка загрузки матчей: {e}")
                 return
         
-        # ---- Загрузка CSV ----
-        csv_df = None
-        if league_name in st.session_state.uploaded_csvs and st.session_state.uploaded_csvs[league_name] is not None:
-            csv_df = st.session_state.uploaded_csvs[league_name]
-            st.info(f"📊 Используется загруженный CSV для {league_name}")
-        else:
-            if league_code:
-                csv_df = load_csv_data(league_code)
-                if csv_df is not None and not csv_df.empty:
-                    st.info(f"📊 Загружена статистика из CSV для {league_name} (файл {league_code}.csv)")
-                else:
-                    st.warning(f"⚠️ Не удалось загрузить CSV для {league_name}. Будет использована упрощённая модель.")
-            else:
-                st.info(f"Для {league_name} нет данных CSV, используется упрощённая модель.")
-        
         betbetter_picks = []
         if league_slug:
             betbetter_picks = fetch_betbetter_predictions(league_slug)
@@ -410,16 +352,13 @@ def load_league_data(league_name, force=False):
         odds_data = {}
         if odds_key:
             odds_data = fetch_odds_from_odds_api(odds_key)
-        else:
-            # Если ключа нет, оставляем пустым, чтобы не было 401
-            pass
+        # если ключа нет, просто оставляем пустым
         
         st.session_state.league_cache[league_name] = {
             'matches': matches,
             'team_stats': team_stats,
             'betbetter_picks': betbetter_picks,
             'odds_data': odds_data,
-            'csv_data': csv_df
         }
 
 def refresh_current_league(league_name):
@@ -487,6 +426,7 @@ with st.sidebar:
                     st.warning("⚠️ В файле нет колонок с голами (FTHG/FTAG или HomeGoals/AwayGoals). Форма команд будет рассчитываться без разницы голов.")
                 st.session_state.uploaded_csvs[csv_league_to_upload] = df
                 st.success(f"✅ Файл загружен для {csv_league_to_upload}! {len(df)} матчей.")
+                # Принудительно обновляем кэш этой лиги (только матчи и статистику)
                 load_league_data(csv_league_to_upload, force=True)
                 st.rerun()
             else:
@@ -557,7 +497,7 @@ with st.sidebar:
         st.markdown(f"""
         **Букмекерская контора:** {st.session_state.selected_bookmaker}
         **🤖 ИИ-прогнозы от Bet Better:** Бесплатный сервис на основе машинного обучения. Доступен для топ-лиг (АПЛ, Ла Лига, Бундеслига, Серия А, Лига 1, Лига Чемпионов).
-        **📊 Улучшенная модель:** использует форму команд за последние 5 матчей, личные встречи и сезонный рейтинг. Для работы требуется загрузка CSV-файла (или автоматическая загрузка с football-data.co.uk).
+        **📊 Улучшенная модель:** использует форму команд за последние 5 матчей, личные встречи и сезонный рейтинг. Для работы требуется загрузка CSV-файла (скачайте с football-data.co.uk и загрузите в приложение).
         **📈 Коэффициенты:** Загружаются через TheOddsAPI (если есть ключ и лимит). Если не загрузились, появляются компактные поля для ручного ввода.
         **🧩 Комбинации:** Выбирайте матчи чекбоксом «➕ В комбинацию» под карточкой.
         **🔄 Обновление данных:** Нажмите кнопку «Обновить данные для выбранной лиги».
@@ -579,18 +519,17 @@ for i, league_name in enumerate(league_names):
             st.info(f"Нет предстоящих матчей в {league_name}.")
             continue
         
-        # Принудительно обновляем csv_data, если в uploaded_csvs есть файл для этой лиги
-        if league_name in st.session_state.uploaded_csvs and st.session_state.uploaded_csvs[league_name] is not None:
-            if league_data.get('csv_data') is None:
-                league_data['csv_data'] = st.session_state.uploaded_csvs[league_name]
-                # Обновляем кэш, чтобы сохранить
-                st.session_state.league_cache[league_name] = league_data
+        # Получаем CSV напрямую из uploaded_csvs (если есть)
+        csv_df = st.session_state.uploaded_csvs.get(league_name, None)
+        if csv_df is not None and not csv_df.empty:
+            st.info(f"📊 Используется загруженный CSV для {league_name} ({len(csv_df)} матчей)")
+        else:
+            st.info("📊 Для улучшения прогнозов загрузите CSV-файл для этой лиги.")
         
         matches = league_data['matches']
         team_stats = league_data['team_stats']
         odds_data_api = league_data['odds_data']
         betbetter_picks = league_data['betbetter_picks']
-        csv_df = league_data.get('csv_data', None)
         flag = FLAGS.get(league_name, "⚽")
         
         csv_team_names = None
@@ -925,16 +864,13 @@ with tabs[-1]:
         league_data = st.session_state.league_cache.get(league_name, None)
         if not league_data or not league_data['matches']:
             continue
-        # Принудительно обновляем csv_data
-        if league_name in st.session_state.uploaded_csvs and st.session_state.uploaded_csvs[league_name] is not None:
-            if league_data.get('csv_data') is None:
-                league_data['csv_data'] = st.session_state.uploaded_csvs[league_name]
-                st.session_state.league_cache[league_name] = league_data
+        # Получаем CSV напрямую
+        csv_df = st.session_state.uploaded_csvs.get(league_name, None)
         matches = league_data['matches']
         team_stats = league_data['team_stats']
         odds_data_api = league_data['odds_data']
         betbetter_picks = league_data['betbetter_picks']
-        csv_df = league_data.get('csv_data', None)
+        
         csv_team_names = None
         if csv_df is not None and not csv_df.empty:
             csv_team_names = pd.concat([csv_df['HomeTeam'], csv_df['AwayTeam']]).unique()
