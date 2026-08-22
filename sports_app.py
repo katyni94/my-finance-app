@@ -88,17 +88,24 @@ def can_request_odds(limit=500):
         return False, st.session_state.odds_request_count, limit
     return True, st.session_state.odds_request_count, limit
 
+# ---- Функции для работы с коэффициентами ----
 def update_odds_from_session():
     """Обновляет st.session_state.odds_data из значений в st.session_state (поля ввода)"""
     for key in list(st.session_state.keys()):
         if key.startswith('num_') and key.endswith('_h'):
             match_id = key[4:-2]  # убираем 'num_' и '_h'
+            if match_id not in st.session_state.odds_data:
+                st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
             st.session_state.odds_data[match_id]['h'] = st.session_state[key]
         elif key.startswith('num_') and key.endswith('_d'):
             match_id = key[4:-2]
+            if match_id not in st.session_state.odds_data:
+                st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
             st.session_state.odds_data[match_id]['d'] = st.session_state[key]
         elif key.startswith('num_') and key.endswith('_a'):
             match_id = key[4:-2]
+            if match_id not in st.session_state.odds_data:
+                st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
             st.session_state.odds_data[match_id]['a'] = st.session_state[key]
 
 def get_odds(match_id):
@@ -487,43 +494,48 @@ for i, league_name in enumerate(league_names):
                     prob_away /= total
                 source = "📊 Статистическая модель"
             
-            # Коэффициенты
-            home_odds = None
-            away_odds = None
-            draw_odds = None
-            bookmaker_name = "Неизвестная БК"
-            manual_input_needed = False
+            # --- Проверяем наличие API-коэффициентов ---
+            api_odds_found = False
+            api_home_odds = None
+            api_away_odds = None
+            api_draw_odds = None
+            api_bookmaker = "Неизвестная БК"
+            if odds_data_api:
+                key = (home, away)
+                if key in odds_data_api:
+                    api_home_odds = odds_data_api[key]['home_win']
+                    api_away_odds = odds_data_api[key]['away_win']
+                    api_draw_odds = odds_data_api[key]['draw']
+                    api_bookmaker = odds_data_api[key]['bookmaker']
+                    api_odds_found = True
+                else:
+                    for (h, a), val in odds_data_api.items():
+                        if clean_team_name(h) == home_clean and clean_team_name(a) == away_clean:
+                            api_home_odds = val['home_win']
+                            api_away_odds = val['away_win']
+                            api_draw_odds = val['draw']
+                            api_bookmaker = val['bookmaker']
+                            api_odds_found = True
+                            break
             
-            if match_id in st.session_state.odds_data:
+            # --- Определяем, нужно ли показывать поля для ручного ввода ---
+            # Показываем поля, если НЕТ API-коэффициентов (независимо от наличия ручных значений в odds_data)
+            manual_input_needed = not api_odds_found
+            
+            # Если есть API-коэффициенты, используем их
+            if api_odds_found:
+                home_odds = api_home_odds
+                away_odds = api_away_odds
+                draw_odds = api_draw_odds
+                bookmaker_name = api_bookmaker
+            else:
+                # Если нет API, берём ручные из хранилища (или инициализируем)
+                if match_id not in st.session_state.odds_data:
+                    st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
                 home_odds = st.session_state.odds_data[match_id]['h']
                 away_odds = st.session_state.odds_data[match_id]['a']
                 draw_odds = st.session_state.odds_data[match_id]['d']
-                manual_input_needed = False
                 bookmaker_name = st.session_state.selected_bookmaker
-            else:
-                if odds_data_api:
-                    key = (home, away)
-                    if key in odds_data_api:
-                        home_odds = odds_data_api[key]['home_win']
-                        away_odds = odds_data_api[key]['away_win']
-                        draw_odds = odds_data_api[key]['draw']
-                        bookmaker_name = odds_data_api[key]['bookmaker']
-                    else:
-                        for (h, a), val in odds_data_api.items():
-                            if clean_team_name(h) == home_clean and clean_team_name(a) == away_clean:
-                                home_odds = val['home_win']
-                                away_odds = val['away_win']
-                                draw_odds = val['draw']
-                                bookmaker_name = val['bookmaker']
-                                break
-                if not (home_odds and away_odds and draw_odds):
-                    manual_input_needed = True
-                    if match_id not in st.session_state.odds_data:
-                        st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
-                    home_odds = st.session_state.odds_data[match_id]['h']
-                    away_odds = st.session_state.odds_data[match_id]['a']
-                    draw_odds = st.session_state.odds_data[match_id]['d']
-                    bookmaker_name = st.session_state.selected_bookmaker
             
             best_bet = None
             best_value = 0
