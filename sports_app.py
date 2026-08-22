@@ -3,29 +3,45 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
-import time
+import re
 
 st.set_page_config(page_title="Спортивный аналитик", layout="wide")
 st.title("⚽ Спортивный аналитик — поиск валуйных ставок")
 
-# ---- Загрузка API-ключа ----
-api_key = st.secrets.get("FOOTBALL_API_KEY")
-if not api_key:
-    api_key = st.text_input("Введите ваш API-ключ Football-Data.org", type="password")
-    if not api_key:
-        st.warning("Получите ключ на football-data.org и введите его.")
+# ---- Словарь флагов для лиг ----
+FLAGS = {
+    "АПЛ (Англия)": "🇬🇧",
+    "Ла Лига (Испания)": "🇪🇸",
+    "Бундеслига (Германия)": "🇩🇪",
+    "Серия А (Италия)": "🇮🇹",
+    "Лига 1 (Франция)": "🇫🇷",
+    "Лига Чемпионов": "🏆"
+}
+
+# ---- Функция для упрощения названий команд ----
+def clean_team_name(name):
+    name = re.sub(r'\s+FC$', '', name)
+    name = re.sub(r'\s+AFC$', '', name)
+    return name
+
+# ---- Загрузка API-ключей ----
+football_key = st.secrets.get("FOOTBALL_API_KEY")
+if not football_key:
+    football_key = st.text_input("Введите API-ключ Football-Data.org", type="password")
+    if not football_key:
+        st.warning("Ключ нужен для расписания матчей.")
         st.stop()
 
-# ---- Кэширование данных (на 5 минут) ----
+odds_key = st.secrets.get("ODDS_API_KEY")
+if not odds_key:
+    odds_key = st.text_input("Введите API-ключ TheOddsAPI (опционально, для коэффициентов)", type="password")
+    if not odds_key:
+        st.info("Можно работать без коэффициентов или вводить их вручную.")
+
+# ---- Кэширование данных ----
 @st.cache_data(ttl=300)
 def fetch_matches_and_standings(comp_id, api_key):
-    """
-    Загружает матчи и таблицу за один вызов (с кэшированием).
-    Возвращает (matches, team_stats) или None при ошибке.
-    """
     headers = {'X-Auth-Token': api_key}
-    
-    # 1. Загружаем матчи
     url_matches = f"https://api.football-data.org/v4/competitions/{comp_id}/matches"
     params = {
         'status': 'SCHEDULED',
@@ -34,18 +50,14 @@ def fetch_matches_and_standings(comp_id, api_key):
     }
     resp = requests.get(url_matches, headers=headers, params=params)
     if resp.status_code == 429:
-        # Ошибка лимита запросов
         raise Exception("429")
     if resp.status_code != 200:
         raise Exception(f"Ошибка API: {resp.status_code} - {resp.text}")
     data = resp.json()
     matches = data.get('matches', [])
     
-    # 2. Загружаем таблицу
     table_url = f"https://api.football-data.org/v4/competitions/{comp_id}/standings"
     table_resp = requests.get(table_url, headers=headers)
-    if table_resp.status_code == 429:
-        raise Exception("429")
     team_stats = {}
     if table_resp.status_code == 200:
         table_data = table_resp.json()
@@ -62,25 +74,141 @@ def fetch_matches_and_standings(comp_id, api_key):
                 }
     return matches, team_stats
 
-# ---- Выбор турнира ----
-competitions = {
-    "АПЛ (Англия)": 2021,
-    "Ла Лига (Испания)": 2014,
-    "Бундеслига (Германия)": 2002,
-    "Серия А (Италия)": 2019,
-    "Лига 1 (Франция)": 2015,
-    "Лига Чемпионов": 2001,
-}
-comp_name = st.selectbox("Выберите турнир", list(competitions.keys()))
-comp_id = competitions[comp_name]
+@st.cache_data(ttl=300)
+def fetch_all_matches(api_key):
+    headers = {'X-Auth-Token': api_key}
+    url = "https://api.football-data.org/v4/matches"
+    params = {
+        'status': 'SCHEDULED',
+        'dateFrom': datetime.now().strftime('%Y-%m-%d'),
+        'dateTo': (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
+    }
+    resp = requests.get(url, headers=headers, params=params)
+    if resp.status_code == 429:
+        raise Exception("429")
+    if resp.status_code != 200:
+        raise Exception(f"Ошибка API: {resp.status_code} - {resp.text}")
+    data = resp.json()
+    return data.get('matches', [])
 
-show_only_value = st.checkbox("Показать только матчи с валуйными ставками", value=False)
+# ---- Функция для получения коэффициентов через TheOddsAPI ----
+def fetch_odds_from_odds_api(api_key, sport='soccer', region='eu', market='h2h'):
+    """
+    Загружает коэффициенты для всех матчей на сегодня.
+    Возвращает словарь: (home_team, away_team) -> {home_win, draw, away_win}
+    """
+    if not api_key:
+        return {}
+    try:
+        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds"
+        params = {
+            'apiKey': api_key,
+            'regions': region,
+            'markets': market,
+            'dateFormat': 'iso'
+        }
+        resp = requests.get(url, params=params, timeout=10)
+        if resp.status_code != 200:
+            st.warning(f"Не удалось загрузить коэффициенты: {resp.status_code}")
+            return {}
+        data = resp.json()
+        odds_map = {}
+        for event in data:
+            home = event.get('home_team')
+            away = event.get('away_team')
+            if not home or not away:
+                continue
+            # Ищем первую БК (можно выбрать конкретную позже)
+            bookmakers = event.get('bookmakers', [])
+            if not bookmakers:
+                continue
+            # Берём первую БК
+            bm = bookmakers[0]
+            markets = bm.get('markets', [])
+            for m in markets:
+                if m.get('key') == 'h2h':
+                    outcomes = m.get('outcomes', [])
+                    h_odds = None
+                    d_odds = None
+                    a_odds = None
+                    for o in outcomes:
+                        if o.get('name') == home:
+                            h_odds = o.get('price')
+                        elif o.get('name') == away:
+                            a_odds = o.get('price')
+                        elif o.get('name') == 'Draw':
+                            d_odds = o.get('price')
+                    odds_map[(home, away)] = {
+                        'home_win': h_odds,
+                        'draw': d_odds,
+                        'away_win': a_odds,
+                        'bookmaker': bm.get('title', 'Неизвестная БК')
+                    }
+                    break
+        return odds_map
+    except Exception as e:
+        st.warning(f"Ошибка загрузки коэффициентов: {e}")
+        return {}
 
-# ---- Загрузка ----
+# ---- Боковая панель ----
+with st.sidebar:
+    st.header("⚙️ Настройки")
+    
+    mode = st.radio(
+        "Режим анализа",
+        ["Один турнир", "Все турниры (экспериментальный)"],
+        index=0
+    )
+    
+    competitions = {
+        "АПЛ (Англия)": 2021,
+        "Ла Лига (Испания)": 2014,
+        "Бундеслига (Германия)": 2002,
+        "Серия А (Италия)": 2019,
+        "Лига 1 (Франция)": 2015,
+        "Лига Чемпионов": 2001,
+    }
+    
+    if mode == "Один турнир":
+        comp_name = st.selectbox("Выберите турнир", list(FLAGS.keys()))
+        comp_id = competitions[comp_name]
+        flag = FLAGS.get(comp_name, "⚽")
+    else:
+        comp_name = None
+        comp_id = None
+        flag = "🌍"
+        st.caption("⚠️ В этом режиме турнирная таблица не загружается, прогноз менее точный.")
+    
+    show_only_value = st.checkbox("Показать только матчи с валуйными ставками", value=False)
+    
+    # Выбор источника коэффициентов
+    odds_source = st.selectbox(
+        "Источник коэффициентов",
+        ["Автоматически (TheOddsAPI)", "Вводить вручную"],
+        index=0
+    )
+    
+    with st.expander("ℹ️ Как это работает"):
+        st.markdown("""
+        **Что такое валуйная ставка?**
+        - Мы оцениваем вероятность победы хозяев, ничьей и победы гостей на основе статистики команд.
+        - Если наша вероятность **выше**, чем подразумевает коэффициент букмекера (1/коэф), ставка **валуйная**.
+        
+        **Источники коэффициентов:**
+        - TheOddsAPI — бесплатный ключ даёт 500 запросов/день.
+        - Ручной ввод — вы сами вводите коэффициенты из любимой БК.
+        """)
+
+# ---- Основная кнопка ----
 if st.button("🚀 Найти лучшие ставки"):
     with st.spinner("Анализируем матчи и коэффициенты..."):
         try:
-            matches, team_stats = fetch_matches_and_standings(comp_id, api_key)
+            if mode == "Один турнир":
+                matches, team_stats = fetch_matches_and_standings(comp_id, football_key)
+            else:
+                matches = fetch_all_matches(football_key)
+                team_stats = {}
+                st.info("🌍 Режим всех турниров: прогноз строится без турнирной таблицы.")
         except Exception as e:
             if "429" in str(e):
                 st.error("⏳ Превышен лимит запросов к API (10 в минуту). Подождите 30 секунд и попробуйте снова.")
@@ -89,18 +217,26 @@ if st.button("🚀 Найти лучшие ставки"):
             st.stop()
         
         if not matches:
-            st.info("Нет предстоящих матчей в этом турнире.")
+            st.info("Нет предстоящих матчей.")
             st.stop()
         
-        if not team_stats:
-            st.warning("⚠️ Не удалось загрузить турнирную таблицу. Использую упрощённый расчёт на основе средних голов.")
+        # Загружаем коэффициенты, если выбран автоматический режим
+        odds_data = {}
+        if odds_source == "Автоматически (TheOddsAPI)" and odds_key:
+            odds_data = fetch_odds_from_odds_api(odds_key)
+            if odds_data:
+                st.success(f"✅ Загружены коэффициенты для {len(odds_data)} матчей")
+            else:
+                st.warning("⚠️ Не удалось загрузить коэффициенты. Попробуйте ручной ввод.")
         
-        # Анализ каждого матча
         results = []
         for match in matches:
             home = match['homeTeam']['name']
             away = match['awayTeam']['name']
             match_date = match['utcDate'][:10]
+            
+            home_clean = clean_team_name(home)
+            away_clean = clean_team_name(away)
             
             h = team_stats.get(home, {})
             a = team_stats.get(away, {})
@@ -135,10 +271,40 @@ if st.button("🚀 Найти лучшие ставки"):
                 prob_draw /= total
                 prob_away /= total
             
-            odds = match.get('odds', {})
-            home_odds = odds.get('homeWin')
-            away_odds = odds.get('awayWin')
-            draw_odds = odds.get('draw')
+            # Получаем коэффициенты (из API или из ручного ввода)
+            home_odds = None
+            away_odds = None
+            draw_odds = None
+            bookmaker_name = "Неизвестная БК"
+            
+            if odds_source == "Автоматически (TheOddsAPI)" and odds_data:
+                key = (home, away)
+                if key in odds_data:
+                    home_odds = odds_data[key]['home_win']
+                    away_odds = odds_data[key]['away_win']
+                    draw_odds = odds_data[key]['draw']
+                    bookmaker_name = odds_data[key]['bookmaker']
+                else:
+                    # Попробуем поискать по очищенным названиям
+                    for (h, a), val in odds_data.items():
+                        if clean_team_name(h) == home_clean and clean_team_name(a) == away_clean:
+                            home_odds = val['home_win']
+                            away_odds = val['away_win']
+                            draw_odds = val['draw']
+                            bookmaker_name = val['bookmaker']
+                            break
+            
+            # Если ручной ввод или нет коэффициентов, даём поля для ввода
+            if odds_source == "Вводить вручную" or not (home_odds and away_odds and draw_odds):
+                st.markdown(f"**Введите коэффициенты для {home_clean} vs {away_clean}:**")
+                col_h, col_d, col_a = st.columns(3)
+                with col_h:
+                    home_odds = st.number_input(f"Победа {home_clean}", min_value=1.0, max_value=20.0, value=2.0, step=0.1, key=f"h_{home}_{away}")
+                with col_d:
+                    draw_odds = st.number_input("Ничья", min_value=1.0, max_value=20.0, value=3.0, step=0.1, key=f"d_{home}_{away}")
+                with col_a:
+                    away_odds = st.number_input(f"Победа {away_clean}", min_value=1.0, max_value=20.0, value=2.0, step=0.1, key=f"a_{home}_{away}")
+                bookmaker_name = "Ручной ввод"
             
             def value_found(prob, odds):
                 if prob is None or odds is None or odds <= 0:
@@ -151,7 +317,7 @@ if st.button("🚀 Найти лучшие ставки"):
                 value = prob_home - 1/home_odds
                 if value > best_value:
                     best_value = value
-                    best_bet = f"{home} (кф {home_odds:.2f})"
+                    best_bet = f"{home_clean} (кф {home_odds:.2f})"
             if draw_odds and prob_draw > 0 and value_found(prob_draw, draw_odds):
                 value = prob_draw - 1/draw_odds
                 if value > best_value:
@@ -161,7 +327,7 @@ if st.button("🚀 Найти лучшие ставки"):
                 value = prob_away - 1/away_odds
                 if value > best_value:
                     best_value = value
-                    best_bet = f"{away} (кф {away_odds:.2f})"
+                    best_bet = f"{away_clean} (кф {away_odds:.2f})"
             
             if best_bet:
                 stars = "⭐" * min(5, int(best_value * 20) + 1)
@@ -169,10 +335,14 @@ if st.button("🚀 Найти лучшие ставки"):
             else:
                 recommendation = "⏳ Нет явных валуйных ставок"
             
+            odds_available = home_odds is not None and away_odds is not None and draw_odds is not None
+            if not odds_available:
+                recommendation = "⚖️ Коэффициенты не загружены"
+            
             results.append({
                 "Дата": match_date,
-                "Хозяева": home,
-                "Гости": away,
+                "Хозяева": home_clean,
+                "Гости": away_clean,
                 "Победа хозяев": prob_home,
                 "Ничья": prob_draw,
                 "Победа гостей": prob_away,
@@ -180,14 +350,15 @@ if st.button("🚀 Найти лучшие ставки"):
                 "Кф хозяев": home_odds,
                 "Кф ничья": draw_odds,
                 "Кф гости": away_odds,
+                "Букмекер": bookmaker_name,
                 "value": best_value,
-                "is_value": best_value > 0
+                "is_value": best_value > 0 and odds_available
             })
         
         if show_only_value:
             results = [r for r in results if r['is_value']]
             if not results:
-                st.info("Нет матчей с валуйными ставками в выбранном турнире.")
+                st.info("Нет матчей с валуйными ставками.")
                 st.stop()
         
         st.success(f"✅ Найдено {len(results)} матчей")
@@ -202,27 +373,24 @@ if st.button("🚀 Найти лучшие ставки"):
             
             for _, row in day_matches.iterrows():
                 with st.container():
-                    col1, col2, col3 = st.columns([3, 1, 3])
+                    st.markdown(f"{flag} **{row['Хозяева']}** vs **{row['Гости']}**")
+                    st.caption(f"Букмекер: {row['Букмекер']}")
                     
+                    col1, col2, col3 = st.columns(3)
                     with col1:
-                        st.markdown(f"**{row['Хозяева']}**")
-                        st.progress(row['Победа хозяев'], text=f"Победа: {row['Победа хозяев']:.0%}")
-                    
+                        st.progress(row['Победа хозяев'], text=f"Победа хозяев: {row['Победа хозяев']:.0%}")
+                        if row['Кф хозяев']:
+                            st.caption(f"Кф: {row['Кф хозяев']:.2f}")
                     with col2:
-                        st.markdown("**vs**")
                         st.progress(row['Ничья'], text=f"Ничья: {row['Ничья']:.0%}")
-                    
+                        if row['Кф ничья']:
+                            st.caption(f"Кф: {row['Кф ничья']:.2f}")
                     with col3:
-                        st.markdown(f"**{row['Гости']}**")
-                        st.progress(row['Победа гостей'], text=f"Победа: {row['Победа гостей']:.0%}")
+                        st.progress(row['Победа гостей'], text=f"Победа гостей: {row['Победа гостей']:.0%}")
+                        if row['Кф гости']:
+                            st.caption(f"Кф: {row['Кф гости']:.2f}")
                     
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        st.markdown(f"**Рекомендация:** {row['Рекомендация']}")
-                    with col_b:
-                        odds_str = f"Кф: {row['Кф хозяев']:.2f} / {row['Кф ничья']:.2f} / {row['Кф гости']:.2f}" if row['Кф хозяев'] else "Коэффициенты не загружены"
-                        st.caption(odds_str)
-                    
+                    st.markdown(f"**Рекомендация:** {row['Рекомендация']}")
                     st.divider()
         
         if st.checkbox("Показать график сравнения вероятностей"):
@@ -249,5 +417,5 @@ if st.button("🚀 Найти лучшие ставки"):
         **Интерпретация:**
         - Прогресс-бары показывают вероятность каждого исхода.
         - ⭐ — чем больше звёзд, тем выше потенциальная ценность ставки.
-        - Если вы видите одинаковые вероятности для всех матчей, значит турнирная таблица не загрузилась — попробуйте другой турнир.
+        - Коэффициенты могут быть загружены через TheOddsAPI или введены вручную.
         """)
