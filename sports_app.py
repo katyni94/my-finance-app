@@ -88,15 +88,23 @@ def can_request_odds(limit=500):
         return False, st.session_state.odds_request_count, limit
     return True, st.session_state.odds_request_count, limit
 
-def update_odds(match_id, key, value):
-    if match_id not in st.session_state.odds_data:
-        st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
-    st.session_state.odds_data[match_id][key] = value
+def update_odds_from_session():
+    """Обновляет st.session_state.odds_data из значений в st.session_state (поля ввода)"""
+    for key in list(st.session_state.keys()):
+        if key.startswith('num_') and key.endswith('_h'):
+            match_id = key[4:-2]  # убираем 'num_' и '_h'
+            st.session_state.odds_data[match_id]['h'] = st.session_state[key]
+        elif key.startswith('num_') and key.endswith('_d'):
+            match_id = key[4:-2]
+            st.session_state.odds_data[match_id]['d'] = st.session_state[key]
+        elif key.startswith('num_') and key.endswith('_a'):
+            match_id = key[4:-2]
+            st.session_state.odds_data[match_id]['a'] = st.session_state[key]
 
-def get_odds(match_id, key):
+def get_odds(match_id):
     if match_id not in st.session_state.odds_data:
         st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
-    return st.session_state.odds_data[match_id][key]
+    return st.session_state.odds_data[match_id]
 
 # ---- Словарь лиг Bet Better ----
 BETBETTER_LEAGUES = {
@@ -479,22 +487,20 @@ for i, league_name in enumerate(league_names):
                     prob_away /= total
                 source = "📊 Статистическая модель"
             
-            # Коэффициенты: сначала из хранилища, если есть, иначе из API
+            # Коэффициенты
             home_odds = None
             away_odds = None
             draw_odds = None
             bookmaker_name = "Неизвестная БК"
             manual_input_needed = False
             
-            # Если в хранилище есть ручные коэффициенты для этого match_id
             if match_id in st.session_state.odds_data:
                 home_odds = st.session_state.odds_data[match_id]['h']
                 away_odds = st.session_state.odds_data[match_id]['a']
                 draw_odds = st.session_state.odds_data[match_id]['d']
-                manual_input_needed = False  # не показываем поля, т.к. они уже есть
+                manual_input_needed = False
                 bookmaker_name = st.session_state.selected_bookmaker
             else:
-                # Пытаемся взять из API
                 if odds_data_api:
                     key = (home, away)
                     if key in odds_data_api:
@@ -510,10 +516,8 @@ for i, league_name in enumerate(league_names):
                                 draw_odds = val['draw']
                                 bookmaker_name = val['bookmaker']
                                 break
-                # Если нигде нет, то показываем поля для ввода
                 if not (home_odds and away_odds and draw_odds):
                     manual_input_needed = True
-                    # инициализируем хранилище
                     if match_id not in st.session_state.odds_data:
                         st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
                     home_odds = st.session_state.odds_data[match_id]['h']
@@ -572,6 +576,9 @@ for i, league_name in enumerate(league_names):
                 "manual_input_needed": manual_input_needed,
                 "match_id": match_id
             })
+        
+        # Обновляем odds_data из полей ввода (если они есть в st.session_state)
+        update_odds_from_session()
         
         if show_only_value:
             results = [r for r in results if r['is_value']]
@@ -645,8 +652,7 @@ for i, league_name in enumerate(league_names):
                                             step=0.1,
                                             key=f"num_{match_id}_h",
                                             format="%.2f",
-                                            label_visibility="collapsed",
-                                            on_change=lambda mid=match_id, k='h': update_odds(mid, k, st.session_state[f"num_{mid}_h"])
+                                            label_visibility="collapsed"
                                         )
                                     with c2:
                                         st.number_input(
@@ -656,8 +662,7 @@ for i, league_name in enumerate(league_names):
                                             step=0.1,
                                             key=f"num_{match_id}_d",
                                             format="%.2f",
-                                            label_visibility="collapsed",
-                                            on_change=lambda mid=match_id, k='d': update_odds(mid, k, st.session_state[f"num_{mid}_d"])
+                                            label_visibility="collapsed"
                                         )
                                     with c3:
                                         st.number_input(
@@ -667,8 +672,7 @@ for i, league_name in enumerate(league_names):
                                             step=0.1,
                                             key=f"num_{match_id}_a",
                                             format="%.2f",
-                                            label_visibility="collapsed",
-                                            on_change=lambda mid=match_id, k='a': update_odds(mid, k, st.session_state[f"num_{mid}_a"])
+                                            label_visibility="collapsed"
                                         )
                                 st.markdown("---")
         if st.checkbox("Показать график сравнения вероятностей", key=f"show_graph_{league_name}"):
@@ -793,7 +797,7 @@ with tabs[-1]:
                     prob_away /= total
                 source = "📊 Статистическая модель"
             
-            # Коэффициенты: всегда берём из общего хранилища (если есть), иначе из API
+            # Коэффициенты: всегда из хранилища (если есть), иначе из API
             home_odds = None
             away_odds = None
             draw_odds = None
@@ -820,7 +824,6 @@ with tabs[-1]:
                                 bookmaker_name = val['bookmaker']
                                 break
                 if not (home_odds and away_odds and draw_odds):
-                    # если совсем нет, ставим значения по умолчанию
                     home_odds = 2.0
                     away_odds = 2.0
                     draw_odds = 3.0
@@ -861,7 +864,7 @@ with tabs[-1]:
                 "id": match_id,
                 "Дата": match_date,
                 "Тур": matchday,
-                "Лига": league_name,  # текстовое название
+                "Лига": league_name,
                 "Хозяева": home_clean,
                 "Гости": away_clean,
                 "Победа хозяев": prob_home,
@@ -934,7 +937,6 @@ with tabs[-1]:
                                 else:
                                     if row['id'] in st.session_state.selected_matches:
                                         del st.session_state.selected_matches[row['id']]
-                                # Нет полей ввода!
                                 st.markdown("---")
         
         if st.checkbox("Показать график сравнения вероятностей для лучших матчей", key="show_graph_best"):
