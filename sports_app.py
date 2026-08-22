@@ -70,6 +70,9 @@ if 'filter_date' not in st.session_state:
     st.session_state.filter_date = datetime.now().date()
 if 'show_best' not in st.session_state:
     st.session_state.show_best = False
+# Единое хранилище коэффициентов
+if 'odds_data' not in st.session_state:
+    st.session_state.odds_data = {}
 
 # ---- Ограничение для TheOddsAPI (дневной лимит) ----
 if 'odds_request_count' not in st.session_state:
@@ -85,6 +88,18 @@ def can_request_odds(limit=500):
     if st.session_state.odds_request_count >= limit:
         return False, st.session_state.odds_request_count, limit
     return True, st.session_state.odds_request_count, limit
+
+def update_odds(match_id, key, value):
+    """Обновляет значение коэффициента в едином хранилище"""
+    if match_id not in st.session_state.odds_data:
+        st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
+    st.session_state.odds_data[match_id][key] = value
+
+def get_odds(match_id, key):
+    """Возвращает значение коэффициента из хранилища"""
+    if match_id not in st.session_state.odds_data:
+        st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
+    return st.session_state.odds_data[match_id][key]
 
 # ---- Словарь лиг Bet Better ----
 BETBETTER_LEAGUES = {
@@ -448,6 +463,7 @@ for i, league_name in enumerate(league_names):
             home = match['homeTeam']['name']
             away = match['awayTeam']['name']
             match_date = match['utcDate'][:10]
+            matchday = match.get('matchday', '—')
             home_clean = clean_team_name(home)
             away_clean = clean_team_name(away)
             match_id = f"{league_name}_{home}_{away}_{match_date}"
@@ -545,16 +561,12 @@ for i, league_name in enumerate(league_names):
             
             if not (home_odds and away_odds and draw_odds):
                 manual_input_needed = True
-                key_h = f"odds_{match_id}_h"
-                key_d = f"odds_{match_id}_d"
-                key_a = f"odds_{match_id}_a"
-                if key_h not in st.session_state:
-                    st.session_state[key_h] = 2.0
-                    st.session_state[key_d] = 3.0
-                    st.session_state[key_a] = 2.0
-                home_odds = st.session_state[key_h]
-                away_odds = st.session_state[key_a]
-                draw_odds = st.session_state[key_d]
+                # Инициализация коэффициентов из общего хранилища, если их нет
+                if match_id not in st.session_state.odds_data:
+                    st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
+                home_odds = st.session_state.odds_data[match_id]['h']
+                away_odds = st.session_state.odds_data[match_id]['a']
+                draw_odds = st.session_state.odds_data[match_id]['d']
                 bookmaker_name = st.session_state.selected_bookmaker
             
             best_bet = None
@@ -591,6 +603,7 @@ for i, league_name in enumerate(league_names):
             results.append({
                 "id": match_id,
                 "Дата": match_date,
+                "Тур": matchday,
                 "Хозяева": home_clean,
                 "Гости": away_clean,
                 "Победа хозяев": prob_home,
@@ -605,9 +618,7 @@ for i, league_name in enumerate(league_names):
                 "value": best_value,
                 "is_value": best_value > 0 and home_odds is not None and draw_odds is not None and away_odds is not None,
                 "manual_input_needed": manual_input_needed,
-                "home_key": key_h,
-                "draw_key": key_d,
-                "away_key": key_a
+                "match_id": match_id
             })
         
         if show_only_value:
@@ -666,7 +677,7 @@ for i, league_name in enumerate(league_names):
                         with col:
                             with st.container():
                                 st.markdown(f"{flag} **{row['Хозяева']}** vs **{row['Гости']}**")
-                                st.caption(f"{row['Источник прогноза']} | Букмекер: {row['Букмекер']}")
+                                st.caption(f"Тур {row['Тур']} | {row['Источник прогноза']} | Букмекер: {row['Букмекер']}")
                                 prob_str = f"🏠 {row['Победа хозяев']:.0%}  |  🤝 {row['Ничья']:.0%}  |  🚀 {row['Победа гостей']:.0%}"
                                 st.markdown(prob_str)
                                 if row['Кф хозяев'] and row['Кф ничья'] and row['Кф гости']:
@@ -687,35 +698,39 @@ for i, league_name in enumerate(league_names):
                                     st.markdown("---")
                                     st.caption("Введите коэф. (обновляется автоматически):")
                                     c1, c2, c3 = st.columns(3)
+                                    match_id = row['match_id']
                                     with c1:
                                         st.number_input(
                                             "🏠",
                                             min_value=1.0, max_value=20.0,
-                                            value=st.session_state[row['home_key']],
+                                            value=st.session_state.odds_data[match_id]['h'],
                                             step=0.1,
-                                            key=row['home_key'],
+                                            key=f"num_{match_id}_h",
                                             format="%.2f",
-                                            label_visibility="collapsed"
+                                            label_visibility="collapsed",
+                                            on_change=lambda mid=match_id, k='h': update_odds(mid, k, st.session_state[f"num_{mid}_h"])
                                         )
                                     with c2:
                                         st.number_input(
                                             "🤝",
                                             min_value=1.0, max_value=20.0,
-                                            value=st.session_state[row['draw_key']],
+                                            value=st.session_state.odds_data[match_id]['d'],
                                             step=0.1,
-                                            key=row['draw_key'],
+                                            key=f"num_{match_id}_d",
                                             format="%.2f",
-                                            label_visibility="collapsed"
+                                            label_visibility="collapsed",
+                                            on_change=lambda mid=match_id, k='d': update_odds(mid, k, st.session_state[f"num_{mid}_d"])
                                         )
                                     with c3:
                                         st.number_input(
                                             "🚀",
                                             min_value=1.0, max_value=20.0,
-                                            value=st.session_state[row['away_key']],
+                                            value=st.session_state.odds_data[match_id]['a'],
                                             step=0.1,
-                                            key=row['away_key'],
+                                            key=f"num_{match_id}_a",
                                             format="%.2f",
-                                            label_visibility="collapsed"
+                                            label_visibility="collapsed",
+                                            on_change=lambda mid=match_id, k='a': update_odds(mid, k, st.session_state[f"num_{mid}_a"])
                                         )
                                 st.markdown("---")
         
@@ -774,6 +789,7 @@ with tabs[-1]:
             home = match['homeTeam']['name']
             away = match['awayTeam']['name']
             match_date = match['utcDate'][:10]
+            matchday = match.get('matchday', '—')
             home_clean = clean_team_name(home)
             away_clean = clean_team_name(away)
             match_id = f"{league_name}_{home}_{away}_{match_date}"
@@ -871,17 +887,12 @@ with tabs[-1]:
             
             if not (home_odds and away_odds and draw_odds):
                 manual_input_needed = True
-                # Для "Лучших матчей" используем ключи с префиксом best_, чтобы не конфликтовать с лигами
-                key_h = f"best_odds_{match_id}_h"
-                key_d = f"best_odds_{match_id}_d"
-                key_a = f"best_odds_{match_id}_a"
-                if key_h not in st.session_state:
-                    st.session_state[key_h] = 2.0
-                    st.session_state[key_d] = 3.0
-                    st.session_state[key_a] = 2.0
-                home_odds = st.session_state[key_h]
-                away_odds = st.session_state[key_a]
-                draw_odds = st.session_state[key_d]
+                # Инициализация коэффициентов из общего хранилища
+                if match_id not in st.session_state.odds_data:
+                    st.session_state.odds_data[match_id] = {'h': 2.0, 'd': 3.0, 'a': 2.0}
+                home_odds = st.session_state.odds_data[match_id]['h']
+                away_odds = st.session_state.odds_data[match_id]['a']
+                draw_odds = st.session_state.odds_data[match_id]['d']
                 bookmaker_name = st.session_state.selected_bookmaker
             
             best_bet = None
@@ -918,6 +929,7 @@ with tabs[-1]:
             all_results.append({
                 "id": match_id,
                 "Дата": match_date,
+                "Тур": matchday,
                 "Лига": flag,
                 "Хозяева": home_clean,
                 "Гости": away_clean,
@@ -933,9 +945,7 @@ with tabs[-1]:
                 "value": best_value,
                 "is_value": best_value > 0 and home_odds is not None and draw_odds is not None and away_odds is not None,
                 "manual_input_needed": manual_input_needed,
-                "home_key": key_h,
-                "draw_key": key_d,
-                "away_key": key_a
+                "match_id": match_id
             })
     
     if show_only_value:
@@ -990,7 +1000,7 @@ with tabs[-1]:
                         with col:
                             with st.container():
                                 st.markdown(f"{row['Лига']} **{row['Хозяева']}** vs **{row['Гости']}**")
-                                st.caption(f"{row['Источник прогноза']} | Букмекер: {row['Букмекер']}")
+                                st.caption(f"Тур {row['Тур']} | {row['Источник прогноза']} | Букмекер: {row['Букмекер']}")
                                 prob_str = f"🏠 {row['Победа хозяев']:.0%}  |  🤝 {row['Ничья']:.0%}  |  🚀 {row['Победа гостей']:.0%}"
                                 st.markdown(prob_str)
                                 if row['Кф хозяев'] and row['Кф ничья'] and row['Кф гости']:
@@ -1011,35 +1021,39 @@ with tabs[-1]:
                                     st.markdown("---")
                                     st.caption("Введите коэф. (обновляется автоматически):")
                                     c1, c2, c3 = st.columns(3)
+                                    match_id = row['match_id']
                                     with c1:
                                         st.number_input(
                                             "🏠",
                                             min_value=1.0, max_value=20.0,
-                                            value=st.session_state[row['home_key']],
+                                            value=st.session_state.odds_data[match_id]['h'],
                                             step=0.1,
-                                            key=row['home_key'],
+                                            key=f"best_num_{match_id}_h",
                                             format="%.2f",
-                                            label_visibility="collapsed"
+                                            label_visibility="collapsed",
+                                            on_change=lambda mid=match_id, k='h': update_odds(mid, k, st.session_state[f"best_num_{mid}_h"])
                                         )
                                     with c2:
                                         st.number_input(
                                             "🤝",
                                             min_value=1.0, max_value=20.0,
-                                            value=st.session_state[row['draw_key']],
+                                            value=st.session_state.odds_data[match_id]['d'],
                                             step=0.1,
-                                            key=row['draw_key'],
+                                            key=f"best_num_{match_id}_d",
                                             format="%.2f",
-                                            label_visibility="collapsed"
+                                            label_visibility="collapsed",
+                                            on_change=lambda mid=match_id, k='d': update_odds(mid, k, st.session_state[f"best_num_{mid}_d"])
                                         )
                                     with c3:
                                         st.number_input(
                                             "🚀",
                                             min_value=1.0, max_value=20.0,
-                                            value=st.session_state[row['away_key']],
+                                            value=st.session_state.odds_data[match_id]['a'],
                                             step=0.1,
-                                            key=row['away_key'],
+                                            key=f"best_num_{match_id}_a",
                                             format="%.2f",
-                                            label_visibility="collapsed"
+                                            label_visibility="collapsed",
+                                            on_change=lambda mid=match_id, k='a': update_odds(mid, k, st.session_state[f"best_num_{mid}_a"])
                                         )
                                 st.markdown("---")
         
