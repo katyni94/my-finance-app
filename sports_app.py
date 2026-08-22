@@ -4,24 +4,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import re
+import time
 
-# ---- Ограничение запросов к TheOddsAPI ----
-if 'odds_request_count' not in st.session_state:
-    st.session_state.odds_request_count = 0
-if 'odds_request_date' not in st.session_state:
-    st.session_state.odds_request_date = datetime.now().date()
-
-def can_request_odds(limit=500):
-    """Проверяет, не превышен ли дневной лимит запросов к TheOddsAPI"""
-    today = datetime.now().date()
-    if today != st.session_state.odds_request_date:
-        # Новый день — сбрасываем счётчик
-        st.session_state.odds_request_count = 0
-        st.session_state.odds_request_date = today
-    if st.session_state.odds_request_count >= limit:
-        return False, st.session_state.odds_request_count, limit
-    return True, st.session_state.odds_request_count, limit
-    
 # ---- Аутентификация ----
 def check_password():
     """Проверяет пароль и возвращает True, если пользователь авторизован."""
@@ -31,15 +15,11 @@ def check_password():
     if st.session_state.authenticated:
         return True
 
-    # Показываем форму входа
     st.title("🔐 Вход в систему")
-    
-    # Если задан логин в secrets, проверяем и его (опционально)
     username = st.text_input("Логин", placeholder="Введите логин (если требуется)")
     password = st.text_input("Пароль", type="password", placeholder="Введите пароль")
 
     if st.button("Войти"):
-        # Проверяем пароль (и логин, если он задан)
         correct_username = st.secrets.get("APP_USERNAME", "")
         correct_password = st.secrets.get("APP_PASSWORD", "")
 
@@ -60,13 +40,43 @@ def check_password():
             else:
                 st.error("Неверный пароль")
     return False
-    
+
+# ---- Настройки страницы ----
 st.set_page_config(page_title="Спортивный аналитик", layout="wide")
+
+# ---- Проверка входа ----
+if not check_password():
+    st.stop()
+
+# ---- Заголовок ----
 st.title("⚽ Спортивный аналитик — поиск валуйных ставок")
 
-# ---- Проверка аутентификации ----
-if not check_password():
-    st.stop()  # Прерываем выполнение, если не авторизован
+# ---- Инициализация состояния для ограничения запросов ----
+if 'last_request_time' not in st.session_state:
+    st.session_state.last_request_time = None
+if 'odds_request_count' not in st.session_state:
+    st.session_state.odds_request_count = 0
+if 'odds_request_date' not in st.session_state:
+    st.session_state.odds_request_date = datetime.now().date()
+
+def can_make_request(min_interval_seconds=30):
+    """Проверяет, можно ли сделать новый запрос к Football-Data.org"""
+    if st.session_state.last_request_time is None:
+        return True, 0
+    elapsed = (datetime.now() - st.session_state.last_request_time).total_seconds()
+    if elapsed >= min_interval_seconds:
+        return True, 0
+    return False, int(min_interval_seconds - elapsed)
+
+def can_request_odds(limit=500):
+    """Проверяет, не превышен ли дневной лимит запросов к TheOddsAPI"""
+    today = datetime.now().date()
+    if today != st.session_state.odds_request_date:
+        st.session_state.odds_request_count = 0
+        st.session_state.odds_request_date = today
+    if st.session_state.odds_request_count >= limit:
+        return False, st.session_state.odds_request_count, limit
+    return True, st.session_state.odds_request_count, limit
 
 # ---- Словарь флагов для лиг ----
 FLAGS = {
@@ -151,11 +161,11 @@ def fetch_all_matches(api_key):
     data = resp.json()
     return data.get('matches', [])
 
+# ---- Функция для получения коэффициентов через TheOddsAPI с ограничением ----
 def fetch_odds_from_odds_api(api_key, sport='soccer', region='eu', market='h2h'):
     if not api_key:
         return {}
     
-    # Проверяем лимит
     can_request, count, limit = can_request_odds()
     if not can_request:
         st.warning(f"⚠️ Дневной лимит запросов к TheOddsAPI ({limit}) исчерпан. Попробуйте завтра. (Сделано {count} запросов)")
@@ -174,10 +184,8 @@ def fetch_odds_from_odds_api(api_key, sport='soccer', region='eu', market='h2h')
             st.warning(f"Не удалось загрузить коэффициенты: {resp.status_code}")
             return {}
         data = resp.json()
-        # Увеличиваем счётчик запросов
         st.session_state.odds_request_count += 1
         
-        # ... остальная логика парсинга (без изменений) ...
         odds_map = {}
         for event in data:
             home = event.get('home_team')
@@ -213,7 +221,7 @@ def fetch_odds_from_odds_api(api_key, sport='soccer', region='eu', market='h2h')
     except Exception as e:
         st.warning(f"Ошибка загрузки коэффициентов: {e}")
         return {}
-        
+
 # ---- Боковая панель ----
 with st.sidebar:
     st.header("⚙️ Настройки")
@@ -245,7 +253,6 @@ with st.sidebar:
     
     show_only_value = st.checkbox("Показать только матчи с валуйными ставками", value=False)
     
-    # Выбор источника коэффициентов
     odds_source = st.selectbox(
         "Источник коэффициентов",
         ["Автоматически (TheOddsAPI)", "Вводить вручную"],
@@ -265,6 +272,12 @@ with st.sidebar:
 
 # ---- Основная кнопка ----
 if st.button("🚀 Найти лучшие ставки"):
+    # Проверяем лимит запросов к Football-Data.org
+    can_request, wait_seconds = can_make_request(30)
+    if not can_request:
+        st.warning(f"⏳ Подождите {wait_seconds} секунд перед следующим запросом (ограничение API).")
+        st.stop()
+    
     with st.spinner("Анализируем матчи и коэффициенты..."):
         try:
             if mode == "Один турнир":
@@ -273,9 +286,19 @@ if st.button("🚀 Найти лучшие ставки"):
                 matches = fetch_all_matches(football_key)
                 team_stats = {}
                 st.info("🌍 Режим всех турниров: прогноз строится без турнирной таблицы.")
+            
+            # Обновляем время последнего успешного запроса
+            st.session_state.last_request_time = datetime.now()
+            
         except Exception as e:
             if "429" in str(e):
-                st.error("⏳ Превышен лимит запросов к API (10 в минуту). Подождите 30 секунд и попробуйте снова.")
+                import re
+                match = re.search(r'Wait (\d+) seconds', str(e))
+                if match:
+                    wait = int(match.group(1))
+                    st.error(f"⏳ Превышен лимит запросов к API. Подождите {wait} секунд.")
+                else:
+                    st.error("⏳ Превышен лимит запросов к API (10 в минуту). Подождите 30 секунд.")
             else:
                 st.error(f"Ошибка: {e}")
             st.stop()
@@ -289,9 +312,12 @@ if st.button("🚀 Найти лучшие ставки"):
         if odds_source == "Автоматически (TheOddsAPI)" and odds_key:
             odds_data = fetch_odds_from_odds_api(odds_key)
             if odds_data:
-                st.success(f"✅ Загружены коэффициенты для {len(odds_data)} матчей")
+                used = st.session_state.odds_request_count
+                st.success(f"✅ Загружены коэффициенты для {len(odds_data)} матчей. Использовано запросов: {used}/500 на сегодня.")
             else:
                 st.warning("⚠️ Не удалось загрузить коэффициенты. Попробуйте ручной ввод.")
+        else:
+            odds_data = {}
         
         results = []
         for match in matches:
@@ -335,7 +361,7 @@ if st.button("🚀 Найти лучшие ставки"):
                 prob_draw /= total
                 prob_away /= total
             
-            # Получаем коэффициенты (из API или из ручного ввода)
+            # Получаем коэффициенты (из API или ручного ввода)
             home_odds = None
             away_odds = None
             draw_odds = None
@@ -349,7 +375,6 @@ if st.button("🚀 Найти лучшие ставки"):
                     draw_odds = odds_data[key]['draw']
                     bookmaker_name = odds_data[key]['bookmaker']
                 else:
-                    # Попробуем поискать по очищенным названиям
                     for (h, a), val in odds_data.items():
                         if clean_team_name(h) == home_clean and clean_team_name(a) == away_clean:
                             home_odds = val['home_win']
@@ -359,7 +384,7 @@ if st.button("🚀 Найти лучшие ставки"):
                             break
             
             # Если ручной ввод или нет коэффициентов, даём поля для ввода
-            if odds_source == "Вводить вручную" or not (home_odds and away_odds and draw_odds):
+            if odds_source == "Вводить вручную" or not (home_odds or away_odds or draw_odds):
                 st.markdown(f"**Введите коэффициенты для {home_clean} vs {away_clean}:**")
                 col_h, col_d, col_a = st.columns(3)
                 with col_h:
@@ -402,14 +427,6 @@ if st.button("🚀 Найти лучшие ставки"):
             odds_available = home_odds is not None and away_odds is not None and draw_odds is not None
             if not odds_available:
                 recommendation = "⚖️ Коэффициенты не загружены"
-            if odds_source == "Автоматически (TheOddsAPI)" and odds_key:
-               odds_data = fetch_odds_from_odds_api(odds_key)
-    if odds_data:
-        # Показываем количество использованных запросов
-        used = st.session_state.odds_request_count
-        st.success(f"✅ Загружены коэффициенты для {len(odds_data)} матчей. Использовано запросов: {used}/500 на сегодня.")
-    else:
-        st.warning("⚠️ Не удалось загрузить коэффициенты. Попробуйте ручной ввод.")
             
             results.append({
                 "Дата": match_date,
