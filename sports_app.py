@@ -545,9 +545,10 @@ for i, league_name in enumerate(league_names):
             
             if not (home_odds and away_odds and draw_odds):
                 manual_input_needed = True
-                key_h = f"odds_h_{home}_{away}"
-                key_d = f"odds_d_{home}_{away}"
-                key_a = f"odds_a_{home}_{away}"
+                # Унифицированные ключи на основе match_id
+                key_h = f"odds_{match_id}_h"
+                key_d = f"odds_{match_id}_d"
+                key_a = f"odds_{match_id}_a"
                 if key_h not in st.session_state:
                     st.session_state[key_h] = 2.0
                     st.session_state[key_d] = 3.0
@@ -605,9 +606,9 @@ for i, league_name in enumerate(league_names):
                 "value": best_value,
                 "is_value": best_value > 0 and home_odds is not None and draw_odds is not None and away_odds is not None,
                 "manual_input_needed": manual_input_needed,
-                "home_key": f"odds_h_{home}_{away}",
-                "draw_key": f"odds_d_{home}_{away}",
-                "away_key": f"odds_a_{home}_{away}"
+                "home_key": key_h,
+                "draw_key": key_d,
+                "away_key": key_a
             })
         
         if show_only_value:
@@ -676,7 +677,6 @@ for i, league_name in enumerate(league_names):
                                 st.markdown(f"**Рекомендация:** {row['Рекомендация']}")
                                 
                                 is_selected = row['id'] in st.session_state.selected_matches
-                                # УНИКАЛЬНЫЙ КЛЮЧ: добавляем префикс лиги
                                 if st.checkbox("➕ В комбинацию", value=is_selected, key=f"sel_{league_name}_{row['id']}"):
                                     if row['id'] not in st.session_state.selected_matches:
                                         st.session_state.selected_matches[row['id']] = row
@@ -872,9 +872,9 @@ with tabs[-1]:
             
             if not (home_odds and away_odds and draw_odds):
                 manual_input_needed = True
-                key_h = f"odds_h_{home}_{away}"
-                key_d = f"odds_d_{home}_{away}"
-                key_a = f"odds_a_{home}_{away}"
+                key_h = f"odds_{match_id}_h"
+                key_d = f"odds_{match_id}_d"
+                key_a = f"odds_{match_id}_a"
                 if key_h not in st.session_state:
                     st.session_state[key_h] = 2.0
                     st.session_state[key_d] = 3.0
@@ -933,9 +933,9 @@ with tabs[-1]:
                 "value": best_value,
                 "is_value": best_value > 0 and home_odds is not None and draw_odds is not None and away_odds is not None,
                 "manual_input_needed": manual_input_needed,
-                "home_key": f"odds_h_{home}_{away}",
-                "draw_key": f"odds_d_{home}_{away}",
-                "away_key": f"odds_a_{home}_{away}"
+                "home_key": key_h,
+                "draw_key": key_d,
+                "away_key": key_a
             })
     
     if show_only_value:
@@ -1000,7 +1000,6 @@ with tabs[-1]:
                                 st.markdown(f"**Рекомендация:** {row['Рекомендация']}")
                                 
                                 is_selected = row['id'] in st.session_state.selected_matches
-                                # УНИКАЛЬНЫЙ КЛЮЧ для вкладки "Лучшие матчи"
                                 if st.checkbox("➕ В комбинацию", value=is_selected, key=f"best_sel_{row['id']}"):
                                     if row['id'] not in st.session_state.selected_matches:
                                         st.session_state.selected_matches[row['id']] = row
