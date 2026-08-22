@@ -8,25 +8,19 @@ import time
 
 # ---- Аутентификация ----
 def check_password():
-    """Проверяет пароль и возвращает True, если пользователь авторизован."""
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
-
     if st.session_state.authenticated:
         return True
-
     st.title("🔐 Вход в систему")
     username = st.text_input("Логин", placeholder="Введите логин (если требуется)")
     password = st.text_input("Пароль", type="password", placeholder="Введите пароль")
-
     if st.button("Войти"):
         correct_username = st.secrets.get("APP_USERNAME", "")
         correct_password = st.secrets.get("APP_PASSWORD", "")
-
         if not correct_password:
             st.error("Пароль не настроен в Secrets. Добавьте APP_PASSWORD.")
             return False
-
         if correct_username:
             if username == correct_username and password == correct_password:
                 st.session_state.authenticated = True
@@ -41,17 +35,13 @@ def check_password():
                 st.error("Неверный пароль")
     return False
 
-# ---- Настройки страницы ----
 st.set_page_config(page_title="Спортивный аналитик", layout="wide")
-
-# ---- Проверка входа ----
 if not check_password():
     st.stop()
 
-# ---- Заголовок ----
 st.title("⚽ Спортивный аналитик — поиск валуйных ставок")
 
-# ---- Инициализация состояния для ограничения запросов ----
+# ---- Инициализация состояния ----
 if 'last_request_time' not in st.session_state:
     st.session_state.last_request_time = None
 if 'odds_request_count' not in st.session_state:
@@ -60,7 +50,6 @@ if 'odds_request_date' not in st.session_state:
     st.session_state.odds_request_date = datetime.now().date()
 
 def can_make_request(min_interval_seconds=30):
-    """Проверяет, можно ли сделать новый запрос к Football-Data.org"""
     if st.session_state.last_request_time is None:
         return True, 0
     elapsed = (datetime.now() - st.session_state.last_request_time).total_seconds()
@@ -69,7 +58,6 @@ def can_make_request(min_interval_seconds=30):
     return False, int(min_interval_seconds - elapsed)
 
 def can_request_odds(limit=500):
-    """Проверяет, не превышен ли дневной лимит запросов к TheOddsAPI"""
     today = datetime.now().date()
     if today != st.session_state.odds_request_date:
         st.session_state.odds_request_count = 0
@@ -78,7 +66,7 @@ def can_request_odds(limit=500):
         return False, st.session_state.odds_request_count, limit
     return True, st.session_state.odds_request_count, limit
 
-# ---- Словарь флагов для лиг ----
+# ---- Флаги и утилиты ----
 FLAGS = {
     "АПЛ (Англия)": "🇬🇧",
     "Ла Лига (Испания)": "🇪🇸",
@@ -88,27 +76,26 @@ FLAGS = {
     "Лига Чемпионов": "🏆"
 }
 
-# ---- Функция для упрощения названий команд ----
 def clean_team_name(name):
     name = re.sub(r'\s+FC$', '', name)
     name = re.sub(r'\s+AFC$', '', name)
     return name
 
-# ---- Загрузка API-ключей ----
+# ---- Загрузка ключей ----
 football_key = st.secrets.get("FOOTBALL_API_KEY")
 if not football_key:
     football_key = st.text_input("Введите API-ключ Football-Data.org", type="password")
     if not football_key:
-        st.warning("Ключ нужен для расписания матчей.")
+        st.warning("Ключ нужен для автоматического режима.")
         st.stop()
 
 odds_key = st.secrets.get("ODDS_API_KEY")
 if not odds_key:
-    odds_key = st.text_input("Введите API-ключ TheOddsAPI (опционально, для коэффициентов)", type="password")
+    odds_key = st.text_input("Введите API-ключ TheOddsAPI (опционально)", type="password")
     if not odds_key:
-        st.info("Можно работать без коэффициентов или вводить их вручную.")
+        st.info("Для ручного режима ключ не нужен.")
 
-# ---- Кэширование данных ----
+# ---- Кэшируемые функции (автоматический режим) ----
 @st.cache_data(ttl=300)
 def fetch_matches_and_standings(comp_id, api_key):
     headers = {'X-Auth-Token': api_key}
@@ -125,7 +112,6 @@ def fetch_matches_and_standings(comp_id, api_key):
         raise Exception(f"Ошибка API: {resp.status_code} - {resp.text}")
     data = resp.json()
     matches = data.get('matches', [])
-    
     table_url = f"https://api.football-data.org/v4/competitions/{comp_id}/standings"
     table_resp = requests.get(table_url, headers=headers)
     team_stats = {}
@@ -161,16 +147,14 @@ def fetch_all_matches(api_key):
     data = resp.json()
     return data.get('matches', [])
 
-# ---- Функция для получения коэффициентов через TheOddsAPI с ограничением ----
+# ---- Функция для загрузки коэффициентов (автоматический режим) ----
 def fetch_odds_from_odds_api(api_key, sport='soccer', region='eu', market='h2h'):
     if not api_key:
         return {}
-    
     can_request, count, limit = can_request_odds()
     if not can_request:
-        st.warning(f"⚠️ Дневной лимит запросов к TheOddsAPI ({limit}) исчерпан. Попробуйте завтра. (Сделано {count} запросов)")
+        st.warning(f"⚠️ Дневной лимит TheOddsAPI ({limit}) исчерпан. (Сделано {count} запросов)")
         return {}
-    
     try:
         url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds"
         params = {
@@ -185,7 +169,6 @@ def fetch_odds_from_odds_api(api_key, sport='soccer', region='eu', market='h2h')
             return {}
         data = resp.json()
         st.session_state.odds_request_count += 1
-        
         odds_map = {}
         for event in data:
             home = event.get('home_team')
@@ -225,112 +208,199 @@ def fetch_odds_from_odds_api(api_key, sport='soccer', region='eu', market='h2h')
 # ---- Боковая панель ----
 with st.sidebar:
     st.header("⚙️ Настройки")
-    
     mode = st.radio(
         "Режим анализа",
-        ["Один турнир", "Все турниры (экспериментальный)"],
+        ["Автоматический (турниры)", "Ручной ввод (любые команды)"],
         index=0
     )
     
-    competitions = {
-        "АПЛ (Англия)": 2021,
-        "Ла Лига (Испания)": 2014,
-        "Бундеслига (Германия)": 2002,
-        "Серия А (Италия)": 2019,
-        "Лига 1 (Франция)": 2015,
-        "Лига Чемпионов": 2001,
-    }
-    
-    if mode == "Один турнир":
+    if mode == "Автоматический (турниры)":
         comp_name = st.selectbox("Выберите турнир", list(FLAGS.keys()))
-        comp_id = competitions[comp_name]
+        comp_id = {
+            "АПЛ (Англия)": 2021,
+            "Ла Лига (Испания)": 2014,
+            "Бундеслига (Германия)": 2002,
+            "Серия А (Италия)": 2019,
+            "Лига 1 (Франция)": 2015,
+            "Лига Чемпионов": 2001,
+        }[comp_name]
         flag = FLAGS.get(comp_name, "⚽")
     else:
         comp_name = None
         comp_id = None
-        flag = "🌍"
-        st.caption("⚠️ В этом режиме турнирная таблица не загружается, прогноз менее точный.")
+        flag = "✏️"
+        st.caption("Введите любые команды и свои оценки вероятностей.")
     
     show_only_value = st.checkbox("Показать только матчи с валуйными ставками", value=False)
     
     odds_source = st.selectbox(
-        "Источник коэффициентов",
+        "Источник коэффициентов (для авт. режима)",
         ["Автоматически (TheOddsAPI)", "Вводить вручную"],
         index=0
     )
     
     with st.expander("ℹ️ Как это работает"):
         st.markdown("""
-        **Что такое валуйная ставка?**
-        - Мы оцениваем вероятность победы хозяев, ничьей и победы гостей на основе статистики команд.
-        - Если наша вероятность **выше**, чем подразумевает коэффициент букмекера (1/коэф), ставка **валуйная**.
-        
-        **Источники коэффициентов:**
-        - TheOddsAPI — бесплатный ключ даёт 500 запросов/день.
-        - Ручной ввод — вы сами вводите коэффициенты из любимой БК.
+        **Ручной режим:**
+        - Введите названия команд (любые).
+        - Введите коэффициенты букмекера (если есть).
+        - Задайте свою оценку вероятности для каждого исхода (сумма = 100%).
+        - Приложение сравнит вашу оценку с букмекерской и покажет валуйность.
         """)
 
-# ---- Основная кнопка ----
-if st.button("🚀 Найти лучшие ставки"):
-    # Проверяем лимит запросов к Football-Data.org
-    can_request, wait_seconds = can_make_request(30)
-    if not can_request:
-        st.warning(f"⏳ Подождите {wait_seconds} секунд перед следующим запросом (ограничение API).")
-        st.stop()
+# ---- Основная логика ----
+if st.button("🚀 Анализировать"):
+    # Для ручного режима создадим форму для ввода матчей
+    if mode == "Ручной ввод (любые команды)":
+        st.subheader("Введите данные матча")
+        with st.form("manual_form"):
+            home = st.text_input("Хозяева", value="Команда А")
+            away = st.text_input("Гости", value="Команда Б")
+            st.markdown("**Коэффициенты букмекера (опционально):**")
+            col_h_odd, col_d_odd, col_a_odd = st.columns(3)
+            with col_h_odd:
+                home_odd = st.number_input("Победа хозяев", min_value=1.0, max_value=20.0, value=2.0, step=0.1, key="odd_h")
+            with col_d_odd:
+                draw_odd = st.number_input("Ничья", min_value=1.0, max_value=20.0, value=3.0, step=0.1, key="odd_d")
+            with col_a_odd:
+                away_odd = st.number_input("Победа гостей", min_value=1.0, max_value=20.0, value=2.0, step=0.1, key="odd_a")
+            
+            st.markdown("**Ваша оценка вероятности (в процентах):**")
+            col_h_prob, col_d_prob, col_a_prob = st.columns(3)
+            with col_h_prob:
+                prob_h = st.number_input("Победа хозяев %", min_value=0, max_value=100, value=40, step=1, key="prob_h")
+            with col_d_prob:
+                prob_d = st.number_input("Ничья %", min_value=0, max_value=100, value=30, step=1, key="prob_d")
+            with col_a_prob:
+                prob_a = st.number_input("Победа гостей %", min_value=0, max_value=100, value=30, step=1, key="prob_a")
+            
+            # Нормализуем сумму до 100%
+            total = prob_h + prob_d + prob_a
+            if total == 0:
+                st.error("Сумма вероятностей не может быть нулевой.")
+                st.stop()
+            prob_h = prob_h / total
+            prob_d = prob_d / total
+            prob_a = prob_a / total
+            
+            submitted = st.form_submit_button("Рассчитать валуйность")
+        
+        if submitted:
+            # Вычисляем букмекерскую вероятность
+            if home_odd > 0 and draw_odd > 0 and away_odd > 0:
+                implied_h = 1/home_odd
+                implied_d = 1/draw_odd
+                implied_a = 1/away_odd
+                # Нормализуем маржу
+                margin = implied_h + implied_d + implied_a
+                if margin > 0:
+                    implied_h /= margin
+                    implied_d /= margin
+                    implied_a /= margin
+            else:
+                implied_h = implied_d = implied_a = None
+            
+            # Проверяем валуйность
+            value_found = False
+            best_bet = None
+            best_value = 0
+            
+            if implied_h is not None and prob_h > implied_h:
+                value = prob_h - implied_h
+                if value > best_value:
+                    best_value = value
+                    best_bet = f"{home} (кф {home_odd:.2f})"
+                    value_found = True
+            if implied_d is not None and prob_d > implied_d:
+                value = prob_d - implied_d
+                if value > best_value:
+                    best_value = value
+                    best_bet = f"Ничья (кф {draw_odd:.2f})"
+                    value_found = True
+            if implied_a is not None and prob_a > implied_a:
+                value = prob_a - implied_a
+                if value > best_value:
+                    best_value = value
+                    best_bet = f"{away} (кф {away_odd:.2f})"
+                    value_found = True
+            
+            # Вывод результатов
+            st.divider()
+            st.subheader("📊 Результат анализа")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Ваша оценка (хозяева)", f"{prob_h:.1%}")
+                if implied_h is not None:
+                    st.caption(f"Букмекер: {implied_h:.1%}")
+            with col2:
+                st.metric("Ваша оценка (ничья)", f"{prob_d:.1%}")
+                if implied_d is not None:
+                    st.caption(f"Букмекер: {implied_d:.1%}")
+            with col3:
+                st.metric("Ваша оценка (гости)", f"{prob_a:.1%}")
+                if implied_a is not None:
+                    st.caption(f"Букмекер: {implied_a:.1%}")
+            
+            if value_found:
+                stars = "⭐" * min(5, int(best_value * 20) + 1)
+                st.success(f"✅ Найдена валуйная ставка! {stars}\n\nРекомендуемая ставка: **{best_bet}**")
+            else:
+                st.info("⏳ Валуйных ставок не обнаружено. Ваша оценка не выше букмекерской.")
     
-    with st.spinner("Анализируем матчи и коэффициенты..."):
-        try:
-            if mode == "Один турнир":
-                matches, team_stats = fetch_matches_and_standings(comp_id, football_key)
-            else:
-                matches = fetch_all_matches(football_key)
-                team_stats = {}
-                st.info("🌍 Режим всех турниров: прогноз строится без турнирной таблицы.")
-            
-            # Обновляем время последнего успешного запроса
-            st.session_state.last_request_time = datetime.now()
-            
-        except Exception as e:
-            if "429" in str(e):
-                import re
-                match = re.search(r'Wait (\d+) seconds', str(e))
-                if match:
-                    wait = int(match.group(1))
-                    st.error(f"⏳ Превышен лимит запросов к API. Подождите {wait} секунд.")
-                else:
-                    st.error("⏳ Превышен лимит запросов к API (10 в минуту). Подождите 30 секунд.")
-            else:
-                st.error(f"Ошибка: {e}")
+    else:
+        # ---- Автоматический режим (как раньше) ----
+        # Проверяем лимит
+        can_request, wait_seconds = can_make_request(30)
+        if not can_request:
+            st.warning(f"⏳ Подождите {wait_seconds} секунд перед следующим запросом.")
             st.stop()
+        
+        with st.spinner("Загружаем данные..."):
+            try:
+                if mode == "Автоматический (турниры)":
+                    matches, team_stats = fetch_matches_and_standings(comp_id, football_key)
+                else:
+                    matches = fetch_all_matches(football_key)
+                    team_stats = {}
+                st.session_state.last_request_time = datetime.now()
+            except Exception as e:
+                if "429" in str(e):
+                    import re
+                    match = re.search(r'Wait (\d+) seconds', str(e))
+                    if match:
+                        st.error(f"⏳ Лимит запросов. Подождите {match.group(1)} секунд.")
+                    else:
+                        st.error("⏳ Лимит запросов. Подождите 30 секунд.")
+                else:
+                    st.error(f"Ошибка: {e}")
+                st.stop()
         
         if not matches:
             st.info("Нет предстоящих матчей.")
             st.stop()
         
-        # Загружаем коэффициенты, если выбран автоматический режим
+        # Загружаем коэффициенты
         odds_data = {}
         if odds_source == "Автоматически (TheOddsAPI)" and odds_key:
             odds_data = fetch_odds_from_odds_api(odds_key)
             if odds_data:
                 used = st.session_state.odds_request_count
-                st.success(f"✅ Загружены коэффициенты для {len(odds_data)} матчей. Использовано запросов: {used}/500 на сегодня.")
+                st.success(f"✅ Загружены коэффициенты для {len(odds_data)} матчей (запросов: {used}/500)")
             else:
-                st.warning("⚠️ Не удалось загрузить коэффициенты. Попробуйте ручной ввод.")
-        else:
-            odds_data = {}
+                st.warning("⚠️ Не удалось загрузить коэффициенты. Будет ручной ввод.")
         
         results = []
         for match in matches:
             home = match['homeTeam']['name']
             away = match['awayTeam']['name']
             match_date = match['utcDate'][:10]
-            
             home_clean = clean_team_name(home)
             away_clean = clean_team_name(away)
             
+            # Рассчёт вероятностей на основе статистики (если есть)
             h = team_stats.get(home, {})
             a = team_stats.get(away, {})
-            
             if not h or not a:
                 prob_home = 0.40
                 prob_draw = 0.30
@@ -341,18 +411,15 @@ if st.button("🚀 Найти лучшие ставки"):
                 h_gd = (h.get('goals_for', 0) - h.get('goals_against', 0)) / max(1, h.get('played', 1))
                 a_gd = (a.get('goals_for', 0) - a.get('goals_against', 0)) / max(1, a.get('played', 1))
                 home_boost = 0.15
-                
                 home_rating = h_ppg + h_gd + home_boost
                 away_rating = a_ppg + a_gd
                 total_rating = home_rating + away_rating
-                
                 if total_rating > 0:
                     prob_home = home_rating / total_rating
                     prob_away = away_rating / total_rating
                 else:
                     prob_home = prob_away = 0.4
                 prob_draw = 1 - prob_home - prob_away
-                
                 prob_home = max(0.05, min(0.85, prob_home))
                 prob_away = max(0.05, min(0.85, prob_away))
                 prob_draw = max(0.05, min(0.50, prob_draw))
@@ -361,7 +428,7 @@ if st.button("🚀 Найти лучшие ставки"):
                 prob_draw /= total
                 prob_away /= total
             
-            # Получаем коэффициенты (из API или ручного ввода)
+            # Коэффициенты
             home_odds = None
             away_odds = None
             draw_odds = None
@@ -383,8 +450,8 @@ if st.button("🚀 Найти лучшие ставки"):
                             bookmaker_name = val['bookmaker']
                             break
             
-            # Если ручной ввод или нет коэффициентов, даём поля для ввода
-            if odds_source == "Вводить вручную" or not (home_odds or away_odds or draw_odds):
+            # Если коэффициенты не загружены, предлагаем ручной ввод (прямо в интерфейсе)
+            if not (home_odds and away_odds and draw_odds):
                 st.markdown(f"**Введите коэффициенты для {home_clean} vs {away_clean}:**")
                 col_h, col_d, col_a = st.columns(3)
                 with col_h:
@@ -424,10 +491,6 @@ if st.button("🚀 Найти лучшие ставки"):
             else:
                 recommendation = "⏳ Нет явных валуйных ставок"
             
-            odds_available = home_odds is not None and away_odds is not None and draw_odds is not None
-            if not odds_available:
-                recommendation = "⚖️ Коэффициенты не загружены"
-            
             results.append({
                 "Дата": match_date,
                 "Хозяева": home_clean,
@@ -441,9 +504,10 @@ if st.button("🚀 Найти лучшие ставки"):
                 "Кф гости": away_odds,
                 "Букмекер": bookmaker_name,
                 "value": best_value,
-                "is_value": best_value > 0 and odds_available
+                "is_value": best_value > 0 and home_odds is not None and draw_odds is not None and away_odds is not None
             })
         
+        # Фильтрация и вывод
         if show_only_value:
             results = [r for r in results if r['is_value']]
             if not results:
@@ -451,7 +515,6 @@ if st.button("🚀 Найти лучшие ставки"):
                 st.stop()
         
         st.success(f"✅ Найдено {len(results)} матчей")
-        
         df = pd.DataFrame(results)
         df['Дата'] = pd.to_datetime(df['Дата'])
         dates = sorted(df['Дата'].unique())
@@ -459,12 +522,10 @@ if st.button("🚀 Найти лучшие ставки"):
         for date in dates:
             st.subheader(f"📅 {date.strftime('%d %B %Y')}")
             day_matches = df[df['Дата'] == date]
-            
             for _, row in day_matches.iterrows():
                 with st.container():
                     st.markdown(f"{flag} **{row['Хозяева']}** vs **{row['Гости']}**")
                     st.caption(f"Букмекер: {row['Букмекер']}")
-                    
                     col1, col2, col3 = st.columns(3)
                     with col1:
                         st.progress(row['Победа хозяев'], text=f"Победа хозяев: {row['Победа хозяев']:.0%}")
@@ -478,7 +539,6 @@ if st.button("🚀 Найти лучшие ставки"):
                         st.progress(row['Победа гостей'], text=f"Победа гостей: {row['Победа гостей']:.0%}")
                         if row['Кф гости']:
                             st.caption(f"Кф: {row['Кф гости']:.2f}")
-                    
                     st.markdown(f"**Рекомендация:** {row['Рекомендация']}")
                     st.divider()
         
@@ -506,5 +566,4 @@ if st.button("🚀 Найти лучшие ставки"):
         **Интерпретация:**
         - Прогресс-бары показывают вероятность каждого исхода.
         - ⭐ — чем больше звёзд, тем выше потенциальная ценность ставки.
-        - Коэффициенты могут быть загружены через TheOddsAPI или введены вручную.
         """)
