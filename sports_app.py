@@ -303,7 +303,7 @@ with st.sidebar:
     
     st.divider()
     
-    # ---- ФИЛЬТР ПО ДАТЕ И ЛУЧШИЕ ПОЗИЦИИ ----
+    # ---- ФИЛЬТР ПО ДАТЕ ----
     st.header("🔍 Фильтр по дате")
     filter_date = st.date_input(
         "Выберите дату",
@@ -411,11 +411,15 @@ with st.sidebar:
         - Ставки сортируются по убыванию количества звёзд.
         """)
 
-# =================== ВКЛАДКИ ТУРНИРОВ ===================
-tabs = st.tabs(list(FLAGS.keys()))
+# =================== ВКЛАДКИ ТУРНИРОВ + ЛУЧШИЕ МАТЧИ ===================
+# Создаём список вкладок: сначала лиги, затем "⭐ Лучшие матчи"
+league_names = list(FLAGS.keys())
+tab_names = league_names + ["⭐ Лучшие матчи"]
+tabs = st.tabs(tab_names)
 
-for league_name, tab in zip(FLAGS.keys(), tabs):
-    with tab:
+# --- Вкладки с лигами ---
+for i, league_name in enumerate(league_names):
+    with tabs[i]:
         if league_name not in st.session_state.league_cache:
             load_league_data(league_name)
         
@@ -613,7 +617,6 @@ for league_name, tab in zip(FLAGS.keys(), tabs):
         # ---- Применяем фильтр по дате и сортировку, если включено ----
         if st.session_state.show_best:
             target_date = st.session_state.filter_date
-            # Фильтруем по дате
             filtered_results = []
             for r in results:
                 try:
@@ -622,7 +625,6 @@ for league_name, tab in zip(FLAGS.keys(), tabs):
                         filtered_results.append(r)
                 except:
                     pass
-            # Сортируем по значению (звёздности) по убыванию
             filtered_results.sort(key=lambda x: x.get('value', 0), reverse=True)
             results = filtered_results
         
@@ -721,6 +723,337 @@ for league_name, tab in zip(FLAGS.keys(), tabs):
         
         if st.checkbox("Показать график сравнения вероятностей", key=f"show_graph_{league_name}"):
             plot_df = df.copy()
+            plot_df['match'] = plot_df['Хозяева'] + " vs " + plot_df['Гости']
+            fig = go.Figure()
+            for outcome in ['Победа хозяев', 'Ничья', 'Победа гостей']:
+                fig.add_trace(go.Bar(
+                    x=plot_df['match'],
+                    y=plot_df[outcome],
+                    name=outcome,
+                    text=[f"{v:.0%}" for v in plot_df[outcome]],
+                    textposition='inside'
+                ))
+            fig.update_layout(
+                barmode='group',
+                yaxis_title='Вероятность',
+                xaxis_tickangle=-45,
+                height=400
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+# --- Вкладка "⭐ Лучшие матчи" (последняя вкладка) ---
+with tabs[-1]:
+    st.header("⭐ Лучшие матчи по валуйности")
+    st.caption("Здесь собраны все матчи из всех лиг, отсортированные по убыванию валуйности (звёзд).")
+    
+    # Убедимся, что все лиги загружены
+    for league_name in FLAGS.keys():
+        if league_name not in st.session_state.league_cache:
+            load_league_data(league_name)
+    
+    # Собираем все матчи из всех лиг
+    all_results = []
+    for league_name in FLAGS.keys():
+        league_data = st.session_state.league_cache.get(league_name, None)
+        if not league_data or not league_data['matches']:
+            continue
+        
+        matches = league_data['matches']
+        team_stats = league_data['team_stats']
+        odds_data = league_data['odds_data']
+        betbetter_picks = league_data['betbetter_picks']
+        flag = FLAGS.get(league_name, "⚽")
+        
+        betbetter_map = {}
+        for pick in betbetter_picks or []:
+            game = pick.get('game', '')
+            if ' @ ' in game:
+                away_team, home_team = game.split(' @ ', 1)
+                home_team = home_team.strip()
+                away_team = away_team.strip()
+                betbetter_map[(home_team, away_team)] = pick
+                betbetter_map[(clean_team_name(home_team), clean_team_name(away_team))] = pick
+        
+        for match in matches:
+            home = match['homeTeam']['name']
+            away = match['awayTeam']['name']
+            match_date = match['utcDate'][:10]
+            home_clean = clean_team_name(home)
+            away_clean = clean_team_name(away)
+            match_id = f"{league_name}_{home}_{away}_{match_date}"
+            
+            ai_pick = None
+            if (home, away) in betbetter_map:
+                ai_pick = betbetter_map[(home, away)]
+            elif (home_clean, away_clean) in betbetter_map:
+                ai_pick = betbetter_map[(home_clean, away_clean)]
+            else:
+                for (h, a), pick in betbetter_map.items():
+                    if (home_clean in h and away_clean in a) or (home in h and away in a):
+                        ai_pick = pick
+                        break
+            
+            if ai_pick:
+                selection = ai_pick.get('selection', '')
+                prob_pct = ai_pick.get('modelProbabilityPct', 50)
+                confidence = ai_pick.get('confidence', 'LEAN')
+                verdict = ai_pick.get('verdict', '')
+                if selection == home or selection == home_clean:
+                    prob_home = prob_pct / 100
+                    remaining = 1 - prob_home
+                    prob_draw = remaining * 0.5
+                    prob_away = remaining * 0.5
+                elif selection == away or selection == away_clean:
+                    prob_away = prob_pct / 100
+                    remaining = 1 - prob_away
+                    prob_home = remaining * 0.5
+                    prob_draw = remaining * 0.5
+                else:
+                    prob_home = prob_pct / 100
+                    prob_away = 0.3
+                    prob_draw = 0.3
+                total = prob_home + prob_draw + prob_away
+                if total > 0:
+                    prob_home /= total
+                    prob_draw /= total
+                    prob_away /= total
+                source = f"🤖 Bet Better ({confidence})"
+                if verdict:
+                    source += f": {verdict}"
+            else:
+                h = team_stats.get(home, {})
+                a = team_stats.get(away, {})
+                if not h or not a:
+                    prob_home = 0.40
+                    prob_draw = 0.30
+                    prob_away = 0.30
+                else:
+                    h_ppg = h.get('points', 0) / max(1, h.get('played', 1))
+                    a_ppg = a.get('points', 0) / max(1, a.get('played', 1))
+                    h_gd = (h.get('goals_for', 0) - h.get('goals_against', 0)) / max(1, h.get('played', 1))
+                    a_gd = (a.get('goals_for', 0) - a.get('goals_against', 0)) / max(1, a.get('played', 1))
+                    home_boost = 0.15
+                    home_rating = h_ppg + h_gd + home_boost
+                    away_rating = a_ppg + a_gd
+                    total_rating = home_rating + away_rating
+                    if total_rating > 0:
+                        prob_home = home_rating / total_rating
+                        prob_away = away_rating / total_rating
+                    else:
+                        prob_home = prob_away = 0.4
+                    prob_draw = 1 - prob_home - prob_away
+                    prob_home = max(0.05, min(0.85, prob_home))
+                    prob_away = max(0.05, min(0.85, prob_away))
+                    prob_draw = max(0.05, min(0.50, prob_draw))
+                    total = prob_home + prob_draw + prob_away
+                    prob_home /= total
+                    prob_draw /= total
+                    prob_away /= total
+                source = "📊 Статистическая модель"
+            
+            home_odds = None
+            away_odds = None
+            draw_odds = None
+            bookmaker_name = "Неизвестная БК"
+            manual_input_needed = False
+            
+            if odds_data:
+                key = (home, away)
+                if key in odds_data:
+                    home_odds = odds_data[key]['home_win']
+                    away_odds = odds_data[key]['away_win']
+                    draw_odds = odds_data[key]['draw']
+                    bookmaker_name = odds_data[key]['bookmaker']
+                else:
+                    for (h, a), val in odds_data.items():
+                        if clean_team_name(h) == home_clean and clean_team_name(a) == away_clean:
+                            home_odds = val['home_win']
+                            away_odds = val['away_win']
+                            draw_odds = val['draw']
+                            bookmaker_name = val['bookmaker']
+                            break
+            
+            if not (home_odds and away_odds and draw_odds):
+                manual_input_needed = True
+                key_h = f"odds_h_{home}_{away}"
+                key_d = f"odds_d_{home}_{away}"
+                key_a = f"odds_a_{home}_{away}"
+                if key_h not in st.session_state:
+                    st.session_state[key_h] = 2.0
+                    st.session_state[key_d] = 3.0
+                    st.session_state[key_a] = 2.0
+                home_odds = st.session_state[key_h]
+                away_odds = st.session_state[key_a]
+                draw_odds = st.session_state[key_d]
+                bookmaker_name = st.session_state.selected_bookmaker
+            
+            best_bet = None
+            best_value = 0
+            if home_odds and prob_home > 0 and prob_home > 1/home_odds:
+                value = prob_home - 1/home_odds
+                if value > best_value:
+                    best_value = value
+                    best_bet = f"{home_clean} (кф {home_odds:.2f})"
+            if draw_odds and prob_draw > 0 and prob_draw > 1/draw_odds:
+                value = prob_draw - 1/draw_odds
+                if value > best_value:
+                    best_value = value
+                    best_bet = f"Ничья (кф {draw_odds:.2f})"
+            if away_odds and prob_away > 0 and prob_away > 1/away_odds:
+                value = prob_away - 1/away_odds
+                if value > best_value:
+                    best_value = value
+                    best_bet = f"{away_clean} (кф {away_odds:.2f})"
+            
+            if best_bet:
+                stars = "⭐" * min(5, int(best_value * 20) + 1)
+                recommendation = f"{stars} {best_bet}"
+            else:
+                max_prob = max(prob_home, prob_draw, prob_away)
+                if max_prob == prob_home:
+                    rec_text = f"Рекомендуем {home_clean} (вероятность {prob_home:.0%})"
+                elif max_prob == prob_draw:
+                    rec_text = f"Рекомендуем ничью (вероятность {prob_draw:.0%})"
+                else:
+                    rec_text = f"Рекомендуем {away_clean} (вероятность {prob_away:.0%})"
+                recommendation = f"📈 {rec_text}"
+            
+            all_results.append({
+                "id": match_id,
+                "Дата": match_date,
+                "Лига": flag,
+                "Хозяева": home_clean,
+                "Гости": away_clean,
+                "Победа хозяев": prob_home,
+                "Ничья": prob_draw,
+                "Победа гостей": prob_away,
+                "Рекомендация": recommendation,
+                "Кф хозяев": home_odds,
+                "Кф ничья": draw_odds,
+                "Кф гости": away_odds,
+                "Букмекер": bookmaker_name,
+                "Источник прогноза": source,
+                "value": best_value,
+                "is_value": best_value > 0 and home_odds is not None and draw_odds is not None and away_odds is not None,
+                "manual_input_needed": manual_input_needed,
+                "home_key": f"odds_h_{home}_{away}",
+                "draw_key": f"odds_d_{home}_{away}",
+                "away_key": f"odds_a_{home}_{away}"
+            })
+    
+    # ---- Фильтрация и сортировка ----
+    if show_only_value:
+        all_results = [r for r in all_results if r['is_value']]
+    
+    if st.session_state.show_best:
+        target_date = st.session_state.filter_date
+        filtered = []
+        for r in all_results:
+            try:
+                r_date = datetime.strptime(r['Дата'], '%Y-%m-%d').date()
+                if r_date == target_date:
+                    filtered.append(r)
+            except:
+                pass
+        all_results = filtered
+    
+    # Сортируем по убыванию value (звёздности)
+    all_results.sort(key=lambda x: x.get('value', 0), reverse=True)
+    
+    if not all_results:
+        st.info("Нет матчей с валуйными ставками.")
+    else:
+        st.success(f"✅ Найдено {len(all_results)} лучших матчей")
+        df_all = pd.DataFrame(all_results)
+        
+        # Отображаем в компактных карточках (2 в строке)
+        st.markdown("""
+        <style>
+            div[data-testid="stNumberInput"] input {
+                width: 60px !important;
+                font-size: 14px !important;
+                padding: 4px !important;
+            }
+            div[data-testid="column"] {
+                padding-left: 2px !important;
+                padding-right: 2px !important;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        num_cols = 2
+        # Группировка по дате не обязательна, можно просто вывести все карточки подряд
+        # Но для удобства оставим сортировку по дате внутри
+        df_all['Дата'] = pd.to_datetime(df_all['Дата'])
+        dates_sorted = sorted(df_all['Дата'].unique())
+        
+        for date in dates_sorted:
+            st.subheader(f"📅 {date.strftime('%d %B %Y')}")
+            day_items = df_all[df_all['Дата'] == date].to_dict('records')
+            for i in range(0, len(day_items), num_cols):
+                cols = st.columns(num_cols)
+                for col_idx, col in enumerate(cols):
+                    if i + col_idx < len(day_items):
+                        row = day_items[i + col_idx]
+                        with col:
+                            with st.container():
+                                st.markdown(f"{row['Лига']} **{row['Хозяева']}** vs **{row['Гости']}**")
+                                st.caption(f"{row['Источник прогноза']} | Букмекер: {row['Букмекер']}")
+                                prob_str = f"🏠 {row['Победа хозяев']:.0%}  |  🤝 {row['Ничья']:.0%}  |  🚀 {row['Победа гостей']:.0%}"
+                                st.markdown(prob_str)
+                                if row['Кф хозяев'] and row['Кф ничья'] and row['Кф гости']:
+                                    st.caption(f"Кф: {row['Кф хозяев']:.2f} / {row['Кф ничья']:.2f} / {row['Кф гости']:.2f}")
+                                else:
+                                    st.caption("Кф: — / — / —")
+                                st.markdown(f"**Рекомендация:** {row['Рекомендация']}")
+                                
+                                is_selected = row['id'] in st.session_state.selected_matches
+                                if st.checkbox("➕ В комбинацию", value=is_selected, key=f"sel_{row['id']}"):
+                                    if row['id'] not in st.session_state.selected_matches:
+                                        st.session_state.selected_matches[row['id']] = row
+                                else:
+                                    if row['id'] in st.session_state.selected_matches:
+                                        del st.session_state.selected_matches[row['id']]
+                                
+                                if row['manual_input_needed']:
+                                    st.markdown("---")
+                                    st.caption("Введите коэф. (обновляется автоматически):")
+                                    c1, c2, c3 = st.columns(3)
+                                    with c1:
+                                        st.number_input(
+                                            "🏠",
+                                            min_value=1.0, max_value=20.0,
+                                            value=st.session_state[row['home_key']],
+                                            step=0.1,
+                                            key=row['home_key'],
+                                            format="%.2f",
+                                            label_visibility="collapsed"
+                                        )
+                                    with c2:
+                                        st.number_input(
+                                            "🤝",
+                                            min_value=1.0, max_value=20.0,
+                                            value=st.session_state[row['draw_key']],
+                                            step=0.1,
+                                            key=row['draw_key'],
+                                            format="%.2f",
+                                            label_visibility="collapsed"
+                                        )
+                                    with c3:
+                                        st.number_input(
+                                            "🚀",
+                                            min_value=1.0, max_value=20.0,
+                                            value=st.session_state[row['away_key']],
+                                            step=0.1,
+                                            key=row['away_key'],
+                                            format="%.2f",
+                                            label_visibility="collapsed"
+                                        )
+                                st.markdown("---")
+        
+        # График для лучших матчей
+        if st.checkbox("Показать график сравнения вероятностей для лучших матчей", key="show_graph_best"):
+            plot_df = df_all.copy()
             plot_df['match'] = plot_df['Хозяева'] + " vs " + plot_df['Гости']
             fig = go.Figure()
             for outcome in ['Победа хозяев', 'Ничья', 'Победа гостей']:
